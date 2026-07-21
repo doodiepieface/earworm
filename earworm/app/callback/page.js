@@ -20,6 +20,7 @@ export default function CallbackPage() {
     const params = new URLSearchParams(window.location.search);
     const denied = params.get("error");
     const code = params.get("code");
+    const state = params.get("state");
 
     if (denied) {
       setError("Spotify login was cancelled.");
@@ -30,7 +31,7 @@ export default function CallbackPage() {
       return;
     }
 
-    handleCallback(code)
+    handleCallback(code, state)
       .then(() => router.replace("/spotify"))
       .catch((err) => setError(err?.message || "Login failed."));
   }, [router]);

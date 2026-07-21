@@ -13,6 +13,7 @@ const SCOPES =
 
 const TOKEN_KEY = "earworm-spotify-tokens";
 const VERIFIER_KEY = "earworm-spotify-verifier";
+const STATE_KEY = "earworm-spotify-state";
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -84,20 +85,35 @@ export async function beginLogin() {
   if (!CLIENT_ID) throw new Error("Missing NEXT_PUBLIC_SPOTIFY_CLIENT_ID.");
   const verifier = randomString(64);
   localStorage.setItem(VERIFIER_KEY, verifier);
+  // Random `state` binds this login to this browser session. Spotify echoes it
+  // back on the callback; we reject the callback if it doesn't match, which
+  // blocks CSRF / authorization-code injection.
+  const state = randomString(32);
+  localStorage.setItem(STATE_KEY, state);
   const challenge = await sha256Base64Url(verifier);
   const params = new URLSearchParams({
     client_id: CLIENT_ID,
     response_type: "code",
     redirect_uri: redirectUri(),
     scope: SCOPES,
+    state,
     code_challenge_method: "S256",
     code_challenge: challenge,
   });
   window.location.href = `${AUTH_URL}?${params.toString()}`;
 }
 
-// Called on the /callback page with the ?code= from Spotify.
-export async function handleCallback(code) {
+// Called on the /callback page with the ?code= and ?state= from Spotify.
+export async function handleCallback(code, returnedState) {
+  // Verify the state first — a mismatch means this callback wasn't started by
+  // this browser, so refuse it (CSRF protection). Clear it either way so it
+  // can't be replayed.
+  const expectedState = localStorage.getItem(STATE_KEY);
+  localStorage.removeItem(STATE_KEY);
+  if (!expectedState || returnedState !== expectedState) {
+    throw new Error("Login couldn't be verified — please try connecting again.");
+  }
+
   const verifier = localStorage.getItem(VERIFIER_KEY);
   if (!verifier) throw new Error("Login session expired — try connecting again.");
   const body = new URLSearchParams({

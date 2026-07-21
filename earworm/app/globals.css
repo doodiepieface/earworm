@@ -644,8 +644,9 @@ input[type="text"]:focus {
   position: absolute;
   inset: 4px;
   border-radius: 50%;
+  /* Wedge from the top (12 o'clock), clockwise to --open. Default conic start
+     is the top, matching the playhead and the tick marks. */
   background: conic-gradient(
-    from -90deg,
     rgba(255, 180, 84, 0.16),
     rgba(255, 107, 139, 0.16),
     rgba(169, 139, 255, 0.2) var(--open),
@@ -659,10 +660,11 @@ input[type="text"]:focus {
   position: absolute;
   inset: 4px;
   border-radius: 50%;
+  /* Same top-anchored wedge, sized to elapsed (--sweep). No fixed % stop —
+     the colours must span 0→--sweep, not a locked slice of the circle. */
   background: conic-gradient(
-    from -90deg,
     #ffb454,
-    #ff6b8b 55%,
+    #ff6b8b,
     #a98bff var(--sweep),
     transparent var(--sweep)
   );
