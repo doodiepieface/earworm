@@ -1,23 +1,6 @@
 "use client";
 
-import { useState } from "react";
-import { buildShareText } from "@/lib/gameState";
-
-export default function ResultCard({ won, song, guesses, poolName, streak, onNext }) {
-  const [copied, setCopied] = useState(false);
-
-  async function copyResult() {
-    const text = buildShareText({ poolName, guesses, won });
-    try {
-      await navigator.clipboard.writeText(text);
-      setCopied(true);
-      setTimeout(() => setCopied(false), 2000);
-    } catch {
-      // Clipboard blocked (e.g. non-secure context) — show it instead.
-      window.prompt("Copy your result:", text);
-    }
-  }
-
+export default function ResultCard({ won, song, guesses, streak, onNext }) {
   return (
     <div className={`card result-card ${won ? "result-won" : "result-lost"}`}>
       <p className="result-verdict">
@@ -28,7 +11,7 @@ export default function ResultCard({ won, song, guesses, poolName, streak, onNex
 
       <div className="result-song">
         {song.artworkUrl ? (
-          <img src={song.artworkUrl} alt="" width={72} height={72} />
+          <img src={song.artworkUrl} alt="" width={78} height={78} />
         ) : (
           <div className="art-fallback" aria-hidden="true">
             ♪
@@ -49,9 +32,17 @@ export default function ResultCard({ won, song, guesses, poolName, streak, onNex
         <button type="button" className="btn btn-primary" onClick={onNext}>
           Next song
         </button>
-        <button type="button" className="btn btn-ghost" onClick={copyResult}>
-          {copied ? "Copied!" : "Copy result"}
-        </button>
+        {song.appleUrl && (
+          <a
+            className="apple-link"
+            href={song.appleUrl}
+            target="_blank"
+            rel="noopener noreferrer"
+          >
+            Listen on Apple Music
+            <span aria-hidden="true"> ↗</span>
+          </a>
+        )}
       </div>
     </div>
   );

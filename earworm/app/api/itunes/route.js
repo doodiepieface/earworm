@@ -77,6 +77,7 @@ export async function GET(request) {
         kind: r.kind || "",
         trackId: r.trackId,
         trackName: r.trackName,
+        trackViewUrl: r.trackViewUrl || "", // link to the song on Apple Music
         artistId: r.artistId,
         artistName: r.artistName,
         collectionId: r.collectionId,

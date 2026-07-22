@@ -297,6 +297,29 @@ h1 em {
   margin-inline: auto;
 }
 
+/* Home hero — the page's headline, carrying the primary keyword for search. */
+.home-hero {
+  margin: 4px 0 40px;
+}
+
+.home-title {
+  font-family: var(--font-display), serif;
+  font-weight: 500;
+  font-size: clamp(2rem, 5vw, 3.1rem);
+  line-height: 1.05;
+  letter-spacing: -0.01em;
+  margin: 0 0 14px;
+  max-width: 18ch;
+}
+
+.home-tagline {
+  color: var(--muted);
+  max-width: 54ch;
+  margin: 0;
+  font-size: 1.05rem;
+  line-height: 1.5;
+}
+
 /* Stats read like a soft instrument panel. */
 .stats-strip {
   display: flex;
@@ -1117,9 +1140,31 @@ input[type="text"]:focus {
 
 .result-actions {
   display: flex;
-  gap: 10px;
+  align-items: center;
+  gap: 14px;
   flex-wrap: wrap;
   margin-top: 20px;
+}
+
+.apple-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  color: var(--muted);
+  font-size: 0.9rem;
+  font-weight: 600;
+  text-decoration: none;
+  transition: color 0.15s ease;
+}
+
+.apple-link:hover {
+  color: var(--accent);
+}
+
+.apple-link:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 3px;
+  border-radius: 4px;
 }
 
 /* ---------------- Lists page ---------------- */

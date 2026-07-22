@@ -1,0 +1,34 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">
+  <defs>
+    <radialGradient id="disc" cx="50%" cy="42%" r="65%">
+      <stop offset="0%" stop-color="#221c30"/>
+      <stop offset="100%" stop-color="#0c0a12"/>
+    </radialGradient>
+    <radialGradient id="label" cx="50%" cy="40%" r="70%">
+      <stop offset="0%" stop-color="#c2a9ff"/>
+      <stop offset="100%" stop-color="#a98bff"/>
+    </radialGradient>
+  </defs>
+
+  <!-- the record -->
+  <circle cx="16" cy="16" r="15.2" fill="url(#disc)"/>
+
+  <!-- grooves -->
+  <g fill="none" stroke="#4a4363" stroke-width="0.55" opacity="0.85">
+    <circle cx="16" cy="16" r="13"/>
+    <circle cx="16" cy="16" r="11.2"/>
+    <circle cx="16" cy="16" r="9.4"/>
+    <circle cx="16" cy="16" r="7.6"/>
+  </g>
+
+  <!-- center label -->
+  <circle cx="16" cy="16" r="5.4" fill="url(#label)"/>
+  <circle cx="16" cy="16" r="5.4" fill="none" stroke="#d9caff" stroke-width="0.5" opacity="0.7"/>
+
+  <!-- spindle hole -->
+  <circle cx="16" cy="16" r="1" fill="#0c0a12"/>
+
+  <!-- light sheen across the top -->
+  <path d="M6 7 A15 15 0 0 1 26 6" fill="none" stroke="#ffffff" stroke-width="1"
+        opacity="0.14" stroke-linecap="round"/>
+</svg>

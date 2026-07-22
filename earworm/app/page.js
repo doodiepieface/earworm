@@ -45,6 +45,17 @@ export default function HomePage() {
 
   return (
     <div className="page">
+      <header className="home-hero">
+        <h1 className="home-title">
+          Earworm — the song guessing game
+        </h1>
+        <p className="home-tagline">
+          Hear one second of a song and name it, unlocking more with every miss.
+          Play by any artist, a genre pack, your own custom list, or your Spotify
+          library.
+        </p>
+      </header>
+
       {stats && stats.played > 0 && (
         <div className="stats-strip">
           <span className="stat">

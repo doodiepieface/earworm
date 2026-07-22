@@ -9,6 +9,18 @@ export const MAX_GUESSES = LADDER.length;
 // Full preview length once the round is over.
 export const FULL_PREVIEW_SECONDS = 30;
 
+// The longest snippet any guessing stage plays (the final ladder step).
+export const MAX_STAGE_SECONDS = LADDER[LADDER.length - 1];
+
+// Pick a random start offset into the preview so the same song feels fresh
+// each play. Capped so the longest stage still has room to play in full: if
+// the last stage is 15s and the preview is 30s, the clip starts somewhere in
+// the first 15s. Returns 0 if there's no headroom.
+export function pickStartOffset() {
+  const room = Math.max(0, FULL_PREVIEW_SECONDS - MAX_STAGE_SECONDS);
+  return Math.random() * room;
+}
+
 // Label for the Skip button: how many extra seconds the next stage unlocks.
 export function skipLabel(guessCount) {
   const next = LADDER[guessCount + 1];
@@ -27,10 +39,22 @@ export function buildShareText({ poolName, guesses, won }) {
   return `Earworm 🎵 ${poolName}\n${count} ${line}`;
 }
 
-// Pick a random song from the pool, avoiding recently played ids.
-export function pickSong(songs, recentIds) {
-  const avoid = new Set(recentIds);
-  const fresh = songs.filter((s) => !avoid.has(s.id));
-  const candidates = fresh.length > 0 ? fresh : songs;
-  return candidates[Math.floor(Math.random() * candidates.length)];
+// Pick the next song using a shuffle-bag: no song repeats until every song in
+// the pool has been played once. `playedIds` is a Set of ids used this cycle —
+// this function MUTATES it (adds the chosen id, and clears it when the bag is
+// empty). `lastId` is the previous song's id, avoided on a fresh cycle so the
+// pool doesn't play the same track twice across the seam.
+//
+// The pool can grow while you play (streamed imports): new songs simply aren't
+// in `playedIds` yet, so they join the current cycle as eligible picks.
+export function pickSong(songs, playedIds, lastId) {
+  let candidates = songs.filter((s) => !playedIds.has(s.id));
+  if (candidates.length === 0) {
+    // Every song has been played — start a new cycle.
+    playedIds.clear();
+    candidates = songs.length > 1 ? songs.filter((s) => s.id !== lastId) : songs;
+  }
+  const song = candidates[Math.floor(Math.random() * candidates.length)];
+  playedIds.add(song.id);
+  return song;
 }

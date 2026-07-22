@@ -56,8 +56,10 @@ export function toSong(r) {
     id: `it-${r.trackId}`,
     title: r.trackName,
     artist: r.artistName,
+    album: r.collectionName || "",
     previewUrl: r.previewUrl,
     artworkUrl: (r.artworkUrl100 || "").replace("100x100", "300x300"),
+    appleUrl: r.trackViewUrl || "", // opens the song on Apple Music
     genre: r.primaryGenreName || "",
   };
 }
@@ -111,6 +113,27 @@ export function artistsMatch(a, b) {
   if (!xs.length || !ys.length) return false;
   // One shared performer is enough to call it the same recording.
   return xs.some((x) => ys.some((y) => nameNear(x, y)));
+}
+
+// Featured performers named in a track title: "(feat. A & B)", "[ft. C]",
+// "Song featuring D". iTunes credits a guest verse to the lead artist, so the
+// only place the guest's name appears is here in the title.
+function featuredArtists(trackName) {
+  const m = (trackName || "").match(/\b(?:feat|ft|featuring)\.?\s+(.+)$/i);
+  if (!m) return [];
+  const tail = m[1].replace(/[)\]].*$/, ""); // stop at the closing ) or ]
+  return artistParts(tail);
+}
+
+// True if `name` performs on this track — either as the credited artist or as
+// a featured guest named in the title. Lets artist mode include songs the
+// artist only guests on, not just ones they lead.
+function trackByArtist(r, name) {
+  if (artistsMatch(r.artistName, name)) return true;
+  const guests = featuredArtists(r.trackName);
+  if (!guests.length) return false;
+  const target = artistParts(name);
+  return guests.some((g) => target.some((t) => nameNear(g, t)));
 }
 
 // The lead artist alone makes a much cleaner search term than the full
@@ -358,10 +381,11 @@ export async function streamArtistPool(name, { onSong, isAborted } = {}) {
   const seen = new Set();
 
   // Emit a raw iTunes result as a song if it's a fresh, playable, plain
-  // studio cut by this artist (and not a skit/interlude).
+  // studio cut this artist performs on — leading OR featured — and not a
+  // skit/interlude.
   const consider = (r) => {
     if (!r || !r.previewUrl) return;
-    if (!artistsMatch(r.artistName, name)) return;
+    if (!trackByArtist(r, name)) return;
     if (isSkit(r)) return;
     const key = normalize(r.trackName);
     if (!key || seen.has(key)) return;
@@ -379,6 +403,19 @@ export async function streamArtistPool(name, { onSong, isAborted } = {}) {
     // Throttled on the very first call — nothing to show yet.
   }
   firstBatch.forEach(consider);
+  if (isAborted?.()) return;
+
+  // 1b) A general term search (no artistTerm attribute) matches the track
+  //     title too, so it surfaces songs where this artist is only a featured
+  //     guest — those are credited to the lead artist and an artist-field
+  //     search never returns them. `consider`'s featured-credit check keeps
+  //     the real guest spots and drops tracks that merely mention the name.
+  try {
+    const featured = await searchSongs(name, { limit: 200 });
+    featured.forEach(consider);
+  } catch {
+    // Throttled — skip the feature pass; the primary catalog still loads.
+  }
   if (isAborted?.()) return;
 
   const artistId = topArtistId(firstBatch, name);
@@ -401,25 +438,74 @@ export async function streamArtistPool(name, { onSong, isAborted } = {}) {
 // player can name any song. A guess is judged against the round's answer, not
 // by pool membership.
 
+// If the typed text names an album that appears among the search results,
+// return that album's collectionId so we can pull its full track list. The
+// results already carry collectionId/Name, so this costs no extra request —
+// and a normal song-title query matches no album name, so it stays null then.
+const ALBUM_QUERY_MIN = 4;
+function albumIdForQuery(raw, query) {
+  const nq = normalize(query);
+  if (nq.length < ALBUM_QUERY_MIN) return null;
+  const hits = new Map(); // collectionId -> tracks-from-it seen in results
+  for (const r of raw) {
+    if (!r.collectionId || !r.collectionName) continue;
+    const na = normalize(r.collectionName);
+    // The typed text is the album's name, or the start of it.
+    if (na !== nq && !na.startsWith(nq)) continue;
+    hits.set(r.collectionId, (hits.get(r.collectionId) || 0) + 1);
+  }
+  let best = null;
+  let bestN = 0;
+  for (const [id, n] of hits) {
+    if (n > bestN) {
+      best = id;
+      bestN = n;
+    }
+  }
+  return best;
+}
+
 // Suggestions for the guess box: search the catalog, drop instrumental/karaoke
-// cuts, and dedupe the version spam down to one row per title+artist.
-// In artist mode, pass `artist` to scope results to that artist — the answer
-// is always by them, so other artists' same-titled songs are just noise.
-export async function searchGuesses(query, { limit = 8, artist = "" } = {}) {
+// cuts, and dedupe the version spam down to one row per title+artist. If the
+// query names an album, append that album's full track list too, so a player
+// can guess by album. `withAlbum: false` skips that (e.g. for pure title
+// lookups). In artist mode, pass `artist` to scope results to that artist.
+export async function searchGuesses(query, { limit = 8, artist = "", withAlbum = true } = {}) {
   // Bias the search toward the artist when scoped, then filter to be sure.
   const term = artist ? `${query} ${artist}` : query;
   const raw = await searchSongs(term, { limit: artist ? 25 : 15 }); // may throw ThrottledError
   const seen = new Set();
   const out = [];
-  for (const r of raw) {
-    if (versionPenalty(r.trackName || "") >= 2) continue;
-    if (artist && !artistsMatch(r.artistName, artist)) continue;
+  const take = (r, cap) => {
+    if (out.length >= cap) return;
+    if (!r.previewUrl) return;
+    if (versionPenalty(r.trackName || "") >= 2) return;
+    if (isSkit(r)) return;
+    if (artist && !artistsMatch(r.artistName, artist)) return;
     const key = `${normalize(r.trackName)}|${normalize(r.artistName)}`;
-    if (!normalize(r.trackName) || seen.has(key)) continue;
+    if (!normalize(r.trackName) || seen.has(key)) return;
     seen.add(key);
     out.push(toSong(r));
-    if (out.length >= limit) break;
+  };
+
+  for (const r of raw) take(r, limit);
+
+  // Album expansion: only fires when the text actually matches an album name,
+  // so ordinary title guesses pay nothing. Pulls the whole album (one lookup)
+  // and shows more rows than a normal title search since a full album is the
+  // point here.
+  if (withAlbum) {
+    const albumId = albumIdForQuery(raw, query);
+    if (albumId) {
+      const albumTracks = await lookupRetry(albumId, { entity: "song" });
+      const albumCap = 24;
+      for (const r of albumTracks) {
+        if (r.wrapperType && r.wrapperType !== "track") continue; // skip album header
+        take(r, albumCap);
+      }
+    }
   }
+
   return out;
 }
 

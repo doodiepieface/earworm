@@ -15,6 +15,7 @@ import {
   FULL_PREVIEW_SECONDS,
   skipLabel,
   pickSong,
+  pickStartOffset,
 } from "@/lib/gameState";
 import {
   getActivePool,
@@ -44,7 +45,10 @@ export default function PlayPage() {
   const [resolving, setResolving] = useState(false); // still matching more songs
   const [guessArtist, setGuessArtist] = useState(null); // scope guesses in artist mode
 
-  const recentIds = useRef([]);
+  // Shuffle-bag state: ids played in the current cycle, and the last pick.
+  // No song repeats until every song in the pool has been played once.
+  const playedIds = useRef(new Set());
+  const lastId = useRef(null);
 
   /* ---------- Load & resolve the active pool ---------- */
 
@@ -228,12 +232,9 @@ export default function PlayPage() {
   /* ---------- Round lifecycle ---------- */
 
   function startRound(songs) {
-    const song = pickSong(songs, recentIds.current);
-    recentIds.current = [song.id, ...recentIds.current].slice(
-      0,
-      Math.min(8, songs.length - 1)
-    );
-    setRound({ song, guesses: [], status: "playing" });
+    const song = pickSong(songs, playedIds.current, lastId.current);
+    lastId.current = song.id;
+    setRound({ song, guesses: [], status: "playing", startAt: pickStartOffset() });
   }
 
   function finishRound(won, guesses) {
@@ -272,6 +273,21 @@ export default function PlayPage() {
   function handleSkip() {
     if (!round || round.status !== "playing") return;
     addAttempt({ type: "skip" });
+  }
+
+  // A song whose preview won't load isn't a fair round — drop it from the pool
+  // and move on to a fresh song without recording a loss, so the streak holds.
+  function handleUnplayable() {
+    if (!round || round.status !== "playing") return;
+    const badId = round.song.id;
+    const remaining = pool.songs.filter((s) => s.id !== badId);
+    setPool((p) => (p ? { ...p, songs: remaining } : p));
+    if (remaining.length >= 1) {
+      startRound(remaining);
+    } else {
+      setErrorMsg("None of the songs left in this pool will play — try another pool.");
+      setPhase("error");
+    }
   }
 
   /* ---------- Render ---------- */
@@ -313,7 +329,13 @@ export default function PlayPage() {
         </Link>
       </div>
 
-      <SnippetPlayer song={round.song} unlockedSeconds={unlocked} maxSeconds={maxSeconds} />
+      <SnippetPlayer
+        song={round.song}
+        unlockedSeconds={unlocked}
+        maxSeconds={maxSeconds}
+        startAt={ended ? 0 : round.startAt}
+        onUnplayable={handleUnplayable}
+      />
 
       <GuessLadder guesses={round.guesses} status={round.status} />
 
@@ -333,7 +355,6 @@ export default function PlayPage() {
           won={round.status === "won"}
           song={round.song}
           guesses={round.guesses}
-          poolName={pool.name}
           streak={streak}
           onNext={() => startRound(pool.songs)}
         />

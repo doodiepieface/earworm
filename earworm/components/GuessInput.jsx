@@ -17,9 +17,16 @@ import { searchGuesses } from "@/lib/itunes";
 const CACHE_MAX = 60;
 const ANSWER_HINT_MIN = 4;
 
-// Loose fold for prefix comparison: letters/digits only, lowercased.
+// Loose fold for prefix comparison: strip accents, keep letters/digits only.
+// Spaces and punctuation are dropped entirely (not turned into spaces) so a
+// title like "Don't" folds to "dont" — otherwise the apostrophe becomes a
+// space and a player typing "dont" no longer prefix-matches "don t".
 function foldTitle(s) {
-  return (s || "").toLowerCase().replace(/[^a-z0-9]+/g, " ").replace(/\s+/g, " ").trim();
+  return (s || "")
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[̀-ͯ]/g, "")
+    .replace(/[^a-z0-9]+/g, "");
 }
 
 // Same, plus accent stripping — for matching typed text against song fields.
@@ -33,20 +40,25 @@ function foldSearch(s) {
     .trim();
 }
 
-// If what's typed is a long-enough prefix of the answer's title, make sure the
-// answer is in the list (at the top), deduped against anything equivalent.
+// Once 4 or more correct letters of the answer's title are typed, pin the
+// answer to the TOP of the list — dropping any equivalent row the search may
+// have returned so it isn't duplicated. Hoisting (rather than just ensuring
+// it's present) keeps it visible as you keep typing more correct letters,
+// instead of it sliding down once the catalog search starts returning it too.
 function withAnswer(list, query, answer) {
   if (!answer) return list;
   const fq = foldTitle(query);
-  if (fq.replace(/ /g, "").length < ANSWER_HINT_MIN) return list;
+  if (fq.length < ANSWER_HINT_MIN) return list;
   const ft = foldTitle(answer.title);
   if (!ft.startsWith(fq)) return list;
-  const present = list.some(
+  const rest = list.filter(
     (s) =>
-      s.id === answer.id ||
-      (foldTitle(s.title) === ft && foldTitle(s.artist) === foldTitle(answer.artist))
+      !(
+        s.id === answer.id ||
+        (foldTitle(s.title) === ft && foldTitle(s.artist) === foldTitle(answer.artist))
+      )
   );
-  return present ? list : [answer, ...list];
+  return [answer, ...rest];
 }
 
 export default function GuessInput({ onGuess, onSkip, disabled, skipText, answer, localSongs }) {
@@ -68,11 +80,13 @@ export default function GuessInput({ onGuess, onSkip, disabled, skipText, answer
     if (!fq) return [];
     const tokens = fq.split(" ");
     const out = [];
+    // Include the album name in the haystack so typing an album title lists
+    // its tracks from the pool (e.g. "music to be murdered by").
     for (const s of localSongs) {
-      const hay = foldSearch(`${s.title} ${s.artist}`);
+      const hay = foldSearch(`${s.title} ${s.artist} ${s.album || ""}`);
       if (tokens.every((t) => hay.includes(t))) {
         out.push(s);
-        if (out.length >= 8) break;
+        if (out.length >= 12) break;
       }
     }
     return out;
