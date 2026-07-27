@@ -126,9 +126,11 @@ For `R` rounds (default 10):
    than front-loaded.
 
 Contributions are deduped against the host's pool and against each other by
-normalized title + artist (reusing `normalize()`/`artistsMatch()` from
+track id and by normalized title + artist (reusing `normalize()` from
 `lib/itunes.js`), so adding a Drake track to a Drake room cannot create a
-duplicate.
+duplicate. `artistsMatch()` is not needed here — it exists to reconcile
+Spotify's artist formatting with Apple's, and both sides of a room comparison
+are iTunes-sourced.
 
 ### Pool sources
 
@@ -149,8 +151,10 @@ reaches the minimum size.
   song (preview URL, artwork, album, Apple link), so the contributor does the
   resolving work and hands a finished object to the host. No extra load on the
   host, and search cost spreads across devices.
-- Cap: **10 songs per player**.
-- A player can see and undo their own additions; never anyone else's.
+- Cap: **10 songs per player**, enforced host-side as well as in the sender's UI.
+- A player can see their own additions; never anyone else's. There is no undo —
+  an `add` is already folded into the host's deduped pool by the time it renders,
+  and a local-only undo would desync the two.
 - The host receives `add`, dedupes, appends to the pool, and rebroadcasts the
   authoritative count.
 
@@ -213,6 +217,7 @@ and running totals. Auto-advances after ~8 seconds; the host can advance sooner.
 | Host leaves | Presence drop of the host key. Clients show "the host ended the room" and a link home. |
 | Everyone but host leaves | Host sees "everyone left" with an option to end the room. |
 | Duplicate names | Allowed. Presence keys are random ids; a color dot disambiguates. |
+| Room already full | A joiner past the 8-player cap sees its own position in the shared presence roster and leaves on its own — no host arbitration needed. |
 | Pool too small at Start | Start stays disabled below `MIN_POOL_SIZE` (4). |
 
 ## Room history
