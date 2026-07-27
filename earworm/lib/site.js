@@ -3,7 +3,7 @@
 // fallback is the current deployment, but a canonical URL matters for SEO, so
 // update it the moment a custom domain is live.
 export const SITE_URL = (
-  process.env.NEXT_PUBLIC_SITE_URL || "https://earworm-doodiepieface-studio.vercel.app"
+  process.env.NEXT_PUBLIC_SITE_URL || "https://www.earwormgame.net"
 ).replace(/\/$/, "");
 
 export const SITE_NAME = "Earworm";
