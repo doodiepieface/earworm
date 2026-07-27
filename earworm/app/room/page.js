@@ -13,14 +13,16 @@ import { loadPlayerName, savePlayerName } from "@/lib/storage";
 // adding songs while an artist catalog is still pulling.
 export default function RoomEntryPage() {
   const router = useRouter();
-  const [enabled, setEnabled] = useState(null); // null = still checking
   const [name, setName] = useState("");
   const [code, setCode] = useState("");
   const [artist, setArtist] = useState("");
   const [error, setError] = useState("");
 
+  // Env-only check, so it's safe during SSR — no effect needed. The saved name
+  // does come from localStorage, so that part stays in one.
+  const enabled = isRoomsEnabled();
+
   useEffect(() => {
-    setEnabled(isRoomsEnabled());
     setName(loadPlayerName());
   }, []);
 
@@ -62,7 +64,7 @@ export default function RoomEntryPage() {
     router.push(`/room/${c}`);
   }
 
-  if (enabled === false) {
+  if (!enabled) {
     return (
       <div className="page center">
         <p className="error-msg">Multiplayer isn&rsquo;t available on this deployment.</p>

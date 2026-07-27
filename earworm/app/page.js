@@ -20,8 +20,13 @@ export default function HomePage() {
   const [lists, setLists] = useState([]);
   const [spotifyPools, setSpotifyPools] = useState([]);
   const [spotifyConnected, setSpotifyConnected] = useState(false);
-  const [roomsOn, setRoomsOn] = useState(false);
   const [stats, setStats] = useState(null);
+
+  // Unlike the Spotify check below, this reads only build-time env vars — no
+  // browser storage — so it's safe during SSR. Computing it inline (rather than
+  // in an effect) keeps the link in the initial HTML for crawlers and avoids
+  // the section popping in after hydration.
+  const roomsOn = isRoomsEnabled();
 
   // Browser storage is only available after mount. Re-read whenever an account
   // sign-in merges new data in, so the home screen updates without a reload.
@@ -30,7 +35,6 @@ export default function HomePage() {
       setLists(loadLists());
       setSpotifyPools(loadSpotifyPools());
       setSpotifyConnected(isConnected());
-      setRoomsOn(isRoomsEnabled());
       setStats(loadStats());
     };
     refresh();
