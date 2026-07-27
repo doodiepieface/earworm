@@ -629,7 +629,7 @@ function RoomPage() {
     };
     return (
       <div className="page center room-naming">
-        <h1 className="display">
+        <h1>
           Join room <span className="mono">{code}</span>
         </h1>
         <label className="field">
@@ -722,8 +722,14 @@ function RoomPage() {
     const winner = totals[0];
     return (
       <div className="page room-ended">
-        <h1 className="display">
-          {winner?.id === meId.current ? "You won." : `${winner?.name || "Nobody"} wins.`}
+        <h1>
+          {winner?.id === meId.current ? (
+            <>
+              You <em>won.</em>
+            </>
+          ) : (
+            `${winner?.name || "Nobody"} wins.`
+          )}
         </h1>
         <Scoreboard totals={totals} meId={meId.current} final />
         <div className="room-actions">

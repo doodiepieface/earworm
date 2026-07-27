@@ -11,6 +11,7 @@ import {
   loadStats,
 } from "@/lib/storage";
 import { isConnected } from "@/lib/spotify";
+import { isRoomsEnabled } from "@/lib/room";
 import { onSyncUpdate } from "@/lib/sync";
 
 export default function HomePage() {
@@ -19,6 +20,7 @@ export default function HomePage() {
   const [lists, setLists] = useState([]);
   const [spotifyPools, setSpotifyPools] = useState([]);
   const [spotifyConnected, setSpotifyConnected] = useState(false);
+  const [roomsOn, setRoomsOn] = useState(false);
   const [stats, setStats] = useState(null);
 
   // Browser storage is only available after mount. Re-read whenever an account
@@ -28,6 +30,7 @@ export default function HomePage() {
       setLists(loadLists());
       setSpotifyPools(loadSpotifyPools());
       setSpotifyConnected(isConnected());
+      setRoomsOn(isRoomsEnabled());
       setStats(loadStats());
     };
     refresh();
@@ -82,7 +85,21 @@ export default function HomePage() {
         </div>
       )}
 
-      <section className="section section-first">
+      {roomsOn && (
+        <section className="section section-first">
+          <p className="eyebrow">With friends</p>
+          <div className="room-actions">
+            <Link href="/room" className="btn btn-primary">
+              Play with friends
+            </Link>
+            <span className="dim">
+              Host a room, share the code — everyone adds songs and guesses together.
+            </span>
+          </div>
+        </section>
+      )}
+
+      <section className={roomsOn ? "section" : "section section-first"}>
         <p className="eyebrow">Play by artist</p>
         <form className="artist-form" onSubmit={onArtistSubmit}>
           <input

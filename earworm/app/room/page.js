@@ -75,11 +75,15 @@ export default function RoomEntryPage() {
 
   return (
     <div className="page room-entry">
-      <h1 className="display">Play with friends</h1>
-      <p className="lede">
-        One person hosts, everyone else joins with the code. You all hear the
-        same songs — fewest guesses wins.
-      </p>
+      <header className="hero-small">
+        <h1>
+          Play <em>with friends</em>
+        </h1>
+        <p className="hero-sub">
+          One person hosts, everyone else joins with the code. You all hear the
+          same songs — fewest guesses wins.
+        </p>
+      </header>
 
       <label className="field">
         <span>Your name</span>
@@ -96,7 +100,7 @@ export default function RoomEntryPage() {
 
       <section className="section">
         <p className="eyebrow">Join a room</p>
-        <form className="join-form" onSubmit={join}>
+        <form className="artist-form" onSubmit={join}>
           <input
             type="text"
             className="code-input mono"
@@ -134,7 +138,7 @@ export default function RoomEntryPage() {
 
       <section className="section">
         <p className="eyebrow">Or host with an artist</p>
-        <form className="join-form" onSubmit={hostWithArtist}>
+        <form className="artist-form" onSubmit={hostWithArtist}>
           <input
             type="text"
             value={artist}
