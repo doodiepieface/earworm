@@ -1,5 +1,7 @@
 "use client";
 
+import { withAppleAffiliate } from "@/lib/site";
+
 export default function ResultCard({ won, song, guesses, streak, onNext }) {
   return (
     <div className={`card result-card ${won ? "result-won" : "result-lost"}`}>
@@ -35,7 +37,7 @@ export default function ResultCard({ won, song, guesses, streak, onNext }) {
         {song.appleUrl && (
           <a
             className="apple-link"
-            href={song.appleUrl}
+            href={withAppleAffiliate(song.appleUrl)}
             target="_blank"
             rel="noopener noreferrer"
           >

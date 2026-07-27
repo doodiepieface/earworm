@@ -10,6 +10,7 @@ import {
   loadSpotifyPools,
   loadStats,
 } from "@/lib/storage";
+import { isConnected } from "@/lib/spotify";
 import { onSyncUpdate } from "@/lib/sync";
 
 export default function HomePage() {
@@ -17,6 +18,7 @@ export default function HomePage() {
   const [artist, setArtist] = useState("");
   const [lists, setLists] = useState([]);
   const [spotifyPools, setSpotifyPools] = useState([]);
+  const [spotifyConnected, setSpotifyConnected] = useState(false);
   const [stats, setStats] = useState(null);
 
   // Browser storage is only available after mount. Re-read whenever an account
@@ -25,6 +27,7 @@ export default function HomePage() {
     const refresh = () => {
       setLists(loadLists());
       setSpotifyPools(loadSpotifyPools());
+      setSpotifyConnected(isConnected());
       setStats(loadStats());
     };
     refresh();
@@ -140,30 +143,36 @@ export default function HomePage() {
         )}
       </section>
 
-      <section className="section">
-        <p className="eyebrow">Your Spotify</p>
-        {spotifyPools.length === 0 ? (
-          <p className="empty">
-            <Link href="/spotify">Connect Spotify</Link> to turn your playlists,
-            liked songs, and top tracks into pools.
-          </p>
-        ) : (
-          <div className="grid">
-            {spotifyPools.map((p) => (
-              <button
-                key={p.id}
-                type="button"
-                className="card pool-card"
-                onClick={() => play({ type: "spotify", id: p.id })}
-                disabled={p.songs.length < 4}
-              >
-                <span className="pool-name">{p.name}</span>
-                <span className="pool-count mono">{p.songs.length} playable songs</span>
-              </button>
-            ))}
-          </div>
-        )}
-      </section>
+      {/* Spotify is dev-mode-gated (25-user allowlist), so we only surface it
+          to browsers that have actually connected — or that already hold
+          imported pools (which are just playable data, no myth). The public
+          never sees a Spotify feature they can't use. */}
+      {(spotifyConnected || spotifyPools.length > 0) && (
+        <section className="section">
+          <p className="eyebrow">Your Spotify</p>
+          {spotifyPools.length === 0 ? (
+            <p className="empty">
+              <Link href="/spotify">Connect Spotify</Link> to turn your playlists,
+              liked songs, and top tracks into pools.
+            </p>
+          ) : (
+            <div className="grid">
+              {spotifyPools.map((p) => (
+                <button
+                  key={p.id}
+                  type="button"
+                  className="card pool-card"
+                  onClick={() => play({ type: "spotify", id: p.id })}
+                  disabled={p.songs.length < 4}
+                >
+                  <span className="pool-name">{p.name}</span>
+                  <span className="pool-count mono">{p.songs.length} playable songs</span>
+                </button>
+              ))}
+            </div>
+          )}
+        </section>
+      )}
     </div>
   );
 }

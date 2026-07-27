@@ -1,13 +1,16 @@
 import Link from "next/link";
 import { Fraunces, Manrope, JetBrains_Mono } from "next/font/google";
+import { Analytics } from "@vercel/analytics/next";
 import EqIcon from "@/components/EqIcon";
 import AuthButton from "@/components/AuthButton";
+import SpotifyNavLink from "@/components/SpotifyNavLink";
 import {
   SITE_URL,
   SITE_NAME,
   SITE_TAGLINE,
   SITE_DESCRIPTION,
   SITE_KEYWORDS,
+  BUYMEACOFFEE_URL,
 } from "@/lib/site";
 import "./globals.css";
 
@@ -94,15 +97,28 @@ export default function RootLayout({ children }) {
           </Link>
           <nav className="site-nav">
             <Link href="/lists">My lists</Link>
-            <Link href="/spotify">Spotify</Link>
+            <SpotifyNavLink />
             <AuthButton />
           </nav>
         </header>
         <main className="site-main">{children}</main>
         <footer className="site-footer">
-          Previews stream from Apple&rsquo;s iTunes catalog · Not affiliated with
-          Apple or Spotify
+          {BUYMEACOFFEE_URL && (
+            <a
+              className="coffee-link"
+              href={BUYMEACOFFEE_URL}
+              target="_blank"
+              rel="noopener noreferrer"
+            >
+              ☕ Buy me a coffee
+            </a>
+          )}
+          <span className="footer-fine">
+            Previews stream from Apple&rsquo;s iTunes catalog · Not affiliated
+            with Apple or Spotify
+          </span>
         </footer>
+        <Analytics />
       </body>
     </html>
   );
