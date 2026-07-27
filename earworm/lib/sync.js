@@ -1,11 +1,12 @@
 "use client";
 
 // Mirrors a signed-in user's data to their Supabase account and back.
-// Only three things sync — imported Spotify pools, custom lists, and play
-// stats. Everything else (volume, pack caches, and crucially the Spotify
-// OAuth tokens) stays local-only.
+// Only four things sync — imported Spotify pools, custom lists, play stats, and
+// multiplayer room history. Everything else (volume, pack caches, the player's
+// name and device id, and crucially the Spotify OAuth tokens) stays local-only.
 
 import { getClient, isAuthConfigured } from "./supabase";
+import { mergeRoomHistory } from "./roomGame";
 import {
   registerSyncHook,
   readKey,
@@ -13,9 +14,10 @@ import {
   SPOTIFY_POOLS_KEY,
   LISTS_KEY,
   STATS_KEY,
+  ROOM_HISTORY_KEY,
 } from "./storage";
 
-const SYNCABLE = new Set([SPOTIFY_POOLS_KEY, LISTS_KEY, STATS_KEY]);
+const SYNCABLE = new Set([SPOTIFY_POOLS_KEY, LISTS_KEY, STATS_KEY, ROOM_HISTORY_KEY]);
 const TABLE = "user_data";
 const SYNC_EVENT = "earworm:synced";
 
@@ -100,6 +102,9 @@ function mergeValue(key, local, remote) {
   if (remote == null) return local;
   if (local == null) return remote;
   if (key === STATS_KEY) return mergeStats(local, remote);
+  // Room history rows have no `id`, so mergeById would silently drop every one
+  // of them — this branch is required, not cosmetic.
+  if (key === ROOM_HISTORY_KEY) return mergeRoomHistory(local, remote);
   return mergeById(local, remote);
 }
 
