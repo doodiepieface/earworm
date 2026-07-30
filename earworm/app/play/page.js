@@ -3,20 +3,11 @@
 import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import SnippetPlayer from "@/components/SnippetPlayer";
-import GuessInput from "@/components/GuessInput";
-import GuessLadder from "@/components/GuessLadder";
+import RoundBoard from "@/components/RoundBoard";
 import ResultCard from "@/components/ResultCard";
 import { getPack } from "@/data/packs";
-import { streamArtistPool, resolveTracks, isCorrectGuess } from "@/lib/itunes";
-import {
-  LADDER,
-  MAX_GUESSES,
-  FULL_PREVIEW_SECONDS,
-  skipLabel,
-  pickSong,
-  pickStartOffset,
-} from "@/lib/gameState";
+import { streamArtistPool, resolveTracks } from "@/lib/itunes";
+import { pickSong, pickStartOffset } from "@/lib/gameState";
 import {
   getActivePool,
   loadLists,
@@ -231,54 +222,27 @@ export default function PlayPage() {
 
   /* ---------- Round lifecycle ---------- */
 
+  const roundSeq = useRef(0);
+
   function startRound(songs) {
     const song = pickSong(songs, playedIds.current, lastId.current);
     lastId.current = song.id;
-    setRound({ song, guesses: [], status: "playing", startAt: pickStartOffset() });
+    roundSeq.current += 1;
+    setRound({ key: roundSeq.current, song, startAt: pickStartOffset(), result: null });
   }
 
-  function finishRound(won, guesses) {
-    const stats = recordResult(won, guesses.length + 1);
+  // RoundBoard owns the guesses and decides win/loss; the page only records the
+  // outcome and shows the result card.
+  function handleFinish({ won, guessCount, guesses }) {
+    const stats = recordResult(won, guessCount);
     setStreak(stats.streak);
-    setRound((r) => ({ ...r, guesses, status: won ? "won" : "lost" }));
-  }
-
-  function addAttempt(attempt) {
-    setRound((r) => {
-      if (!r || r.status !== "playing") return r;
-      const guesses = [...r.guesses, attempt];
-      if (guesses.length >= MAX_GUESSES) {
-        // Out of guesses — loss. (Record outside the updater on next tick.)
-        setTimeout(() => finishRoundLoss(guesses), 0);
-        return { ...r, guesses, status: "lost" };
-      }
-      return { ...r, guesses };
-    });
-  }
-
-  function finishRoundLoss(guesses) {
-    const stats = recordResult(false, guesses.length);
-    setStreak(stats.streak);
-  }
-
-  function handleGuess(song) {
-    if (!round || round.status !== "playing") return;
-    if (isCorrectGuess(song, round.song)) {
-      finishRound(true, round.guesses);
-    } else {
-      addAttempt({ type: "wrong", label: `${song.title} — ${song.artist}` });
-    }
-  }
-
-  function handleSkip() {
-    if (!round || round.status !== "playing") return;
-    addAttempt({ type: "skip" });
+    setRound((r) => (r ? { ...r, result: { won, guesses } } : r));
   }
 
   // A song whose preview won't load isn't a fair round — drop it from the pool
   // and move on to a fresh song without recording a loss, so the streak holds.
   function handleUnplayable() {
-    if (!round || round.status !== "playing") return;
+    if (!round || round.result) return;
     const badId = round.song.id;
     const remaining = pool.songs.filter((s) => s.id !== badId);
     setPool((p) => (p ? { ...p, songs: remaining } : p));
@@ -312,10 +276,6 @@ export default function PlayPage() {
     );
   }
 
-  const ended = round.status !== "playing";
-  const unlocked = ended ? FULL_PREVIEW_SECONDS : LADDER[round.guesses.length];
-  const maxSeconds = ended ? FULL_PREVIEW_SECONDS : LADDER[LADDER.length - 1];
-
   return (
     <div className="page game">
       <div className="game-top">
@@ -329,36 +289,24 @@ export default function PlayPage() {
         </Link>
       </div>
 
-      <SnippetPlayer
+      <RoundBoard
+        key={round.key}
         song={round.song}
-        unlockedSeconds={unlocked}
-        maxSeconds={maxSeconds}
-        startAt={ended ? 0 : round.startAt}
+        startAt={round.startAt}
+        localSongs={guessArtist ? pool.songs : null}
+        onFinish={handleFinish}
         onUnplayable={handleUnplayable}
-      />
-
-      <GuessLadder guesses={round.guesses} status={round.status} />
-
-      {!ended && (
-        <GuessInput
-          onGuess={handleGuess}
-          onSkip={handleSkip}
-          disabled={ended}
-          skipText={skipLabel(round.guesses.length)}
-          answer={round.song}
-          localSongs={guessArtist ? pool.songs : null}
-        />
-      )}
-
-      {ended && (
-        <ResultCard
-          won={round.status === "won"}
-          song={round.song}
-          guesses={round.guesses}
-          streak={streak}
-          onNext={() => startRound(pool.songs)}
-        />
-      )}
+      >
+        {round.result && (
+          <ResultCard
+            won={round.result.won}
+            song={round.song}
+            guesses={round.result.guesses}
+            streak={streak}
+            onNext={() => startRound(pool.songs)}
+          />
+        )}
+      </RoundBoard>
     </div>
   );
 }

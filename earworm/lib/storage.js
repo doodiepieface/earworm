@@ -1,6 +1,8 @@
 // All browser-storage access lives here so pages/components stay tidy.
 // Everything is defensive: storage can be full, blocked, or contain junk.
 
+import { mergeRoomHistory } from "./roomGame";
+
 function read(key, fallback) {
   if (typeof window === "undefined") return fallback;
   try {
@@ -137,6 +139,50 @@ export function loadPackCache(packId) {
 
 export function savePackCache(packId, data) {
   write(`earworm-pack-${packId}`, { ...data, ts: Date.now() });
+}
+
+/* ---------------- Multiplayer rooms ---------------- */
+
+const PLAYER_NAME_KEY = "earworm-player-name";
+const PLAYER_ID_KEY = "earworm-player-id";
+export const ROOM_HISTORY_KEY = "earworm-room-history";
+
+export function loadPlayerName() {
+  const n = read(PLAYER_NAME_KEY, "");
+  return typeof n === "string" ? n : "";
+}
+
+export function savePlayerName(name) {
+  write(PLAYER_NAME_KEY, String(name || "").slice(0, 20));
+}
+
+// A stable id for this browser. Presence is keyed on it, so refreshing mid-game
+// rejoins as the same player instead of appearing as a second one. Deliberately
+// not synced — a device id must not follow you to another device.
+export function getPlayerId() {
+  let id = read(PLAYER_ID_KEY, null);
+  if (typeof id !== "string" || !id) {
+    id = `p-${Math.random().toString(36).slice(2, 10)}`;
+    write(PLAYER_ID_KEY, id);
+  }
+  return id;
+}
+
+export function loadRoomHistory() {
+  const h = read(ROOM_HISTORY_KEY, []);
+  return Array.isArray(h) ? h : [];
+}
+
+export function saveRoomHistory(entries) {
+  write(ROOM_HISTORY_KEY, entries);
+}
+
+// Newest first, capped. Re-uses the same merge the account layer uses so a
+// local append and a remote merge can never disagree about ordering or limit.
+export function addRoomHistoryEntry(entry) {
+  const merged = mergeRoomHistory([entry], loadRoomHistory());
+  saveRoomHistory(merged);
+  return merged;
 }
 
 /* ---------------- Misc ---------------- */

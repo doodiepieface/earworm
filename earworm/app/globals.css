@@ -1432,3 +1432,210 @@ code {
     transition-duration: 0.001s !important;
   }
 }
+
+/* ---------------- Multiplayer rooms ---------------- */
+
+.field {
+  display: grid;
+  gap: 6px;
+  margin: 0 0 18px;
+  max-width: 340px;
+}
+
+.field > span {
+  font-family: var(--font-mono), monospace;
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  color: var(--muted);
+}
+
+.field.inline {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 0;
+}
+
+.field select {
+  background: var(--surface-2);
+  color: var(--ink);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  padding: 8px 10px;
+  font: inherit;
+}
+
+.room-head {
+  text-align: center;
+  margin-bottom: 28px;
+}
+
+.room-code {
+  font-size: clamp(2.4rem, 9vw, 3.6rem);
+  letter-spacing: 0.3em;
+  text-indent: 0.3em; /* balance the trailing letter-space */
+  color: var(--accent);
+  text-shadow: var(--glow);
+  margin: 4px 0 8px;
+}
+
+.code-input {
+  text-transform: uppercase;
+  letter-spacing: 0.3em;
+  text-align: center;
+  font-size: 1.3rem;
+  max-width: 8ch;
+}
+
+.roster {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.roster li {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+  border-radius: var(--pill);
+  padding: 6px 14px;
+}
+
+.roster li.me {
+  border-color: var(--accent);
+  background: var(--accent-wash);
+}
+
+.roster .dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--win);
+  flex: none;
+}
+
+.roster .tag {
+  font-family: var(--font-mono), monospace;
+  font-size: 0.62rem;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  color: var(--muted);
+}
+
+.my-adds {
+  list-style: none;
+  padding: 0;
+  margin: 14px 0 0;
+  display: grid;
+  gap: 6px;
+}
+
+.my-adds li {
+  display: flex;
+  gap: 10px;
+  align-items: baseline;
+  font-size: 0.92rem;
+  color: var(--muted);
+}
+
+.room-actions {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  flex-wrap: wrap;
+  margin-top: 20px;
+}
+
+.room-waiting {
+  color: var(--muted);
+  text-align: center;
+  margin: 22px 0 0;
+}
+
+/* ---- Scoreboard ---- */
+
+.scoreboard {
+  display: grid;
+  gap: 16px;
+  margin: 18px 0;
+}
+
+.sb-pick {
+  margin: 0;
+  color: var(--accent);
+  font-family: var(--font-display), serif;
+  font-size: 1.1rem;
+}
+
+.sb-round,
+.sb-totals {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: grid;
+  gap: 2px;
+}
+
+.sb-round li {
+  display: grid;
+  grid-template-columns: 1fr auto auto;
+  gap: 12px;
+  align-items: baseline;
+  padding: 7px 0;
+  border-bottom: 1px solid var(--line);
+}
+
+.sb-totals li {
+  display: grid;
+  grid-template-columns: 1.6rem 1fr auto;
+  gap: 12px;
+  align-items: baseline;
+  padding: 7px 0;
+  border-bottom: 1px solid var(--line);
+}
+
+.sb-round li:last-child,
+.sb-totals li:last-child {
+  border-bottom: 0;
+}
+
+.sb-round li.me,
+.sb-totals li.me {
+  color: var(--ink);
+  font-weight: 600;
+}
+
+.sb-place {
+  color: var(--muted);
+}
+
+.sb-detail {
+  color: var(--muted);
+  font-size: 0.88rem;
+}
+
+.sb-points {
+  color: var(--win);
+}
+
+.sb-final {
+  margin: 0;
+  color: var(--muted);
+  font-family: var(--font-mono), monospace;
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+}
+
+@media (max-width: 520px) {
+  .room-code {
+    letter-spacing: 0.22em;
+    text-indent: 0.22em;
+  }
+}

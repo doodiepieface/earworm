@@ -11,6 +11,7 @@ import {
   loadStats,
 } from "@/lib/storage";
 import { isConnected } from "@/lib/spotify";
+import { isRoomsEnabled } from "@/lib/room";
 import { onSyncUpdate } from "@/lib/sync";
 
 export default function HomePage() {
@@ -20,6 +21,12 @@ export default function HomePage() {
   const [spotifyPools, setSpotifyPools] = useState([]);
   const [spotifyConnected, setSpotifyConnected] = useState(false);
   const [stats, setStats] = useState(null);
+
+  // Unlike the Spotify check below, this reads only build-time env vars — no
+  // browser storage — so it's safe during SSR. Computing it inline (rather than
+  // in an effect) keeps the link in the initial HTML for crawlers and avoids
+  // the section popping in after hydration.
+  const roomsOn = isRoomsEnabled();
 
   // Browser storage is only available after mount. Re-read whenever an account
   // sign-in merges new data in, so the home screen updates without a reload.
@@ -82,7 +89,21 @@ export default function HomePage() {
         </div>
       )}
 
-      <section className="section section-first">
+      {roomsOn && (
+        <section className="section section-first">
+          <p className="eyebrow">With friends</p>
+          <div className="room-actions">
+            <Link href="/room" className="btn btn-primary">
+              Play with friends
+            </Link>
+            <span className="dim">
+              Host a room, share the code — everyone adds songs and guesses together.
+            </span>
+          </div>
+        </section>
+      )}
+
+      <section className={roomsOn ? "section" : "section section-first"}>
         <p className="eyebrow">Play by artist</p>
         <form className="artist-form" onSubmit={onArtistSubmit}>
           <input
