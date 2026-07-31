@@ -7,18 +7,15 @@ import RoundBoard from "@/components/RoundBoard";
 import Scoreboard from "@/components/Scoreboard";
 import { getPack } from "@/data/packs";
 import { joinRoom, isRoomsEnabled } from "@/lib/room";
+import { createHost } from "@/lib/roomHost";
 import {
   MIN_PLAYERS,
   MAX_PLAYERS,
   MAX_CONTRIBUTIONS_PER_PLAYER,
   DEFAULT_ROUNDS,
   ROUND_CAP_MS,
-  buildRoundList,
   dedupeContributions,
-  scoreForResult,
-  sortStandings,
 } from "@/lib/roomGame";
-import { pickStartOffset } from "@/lib/gameState";
 import { resolveTracks, streamArtistPool, searchGuesses } from "@/lib/itunes";
 import {
   getPlayerId,
@@ -81,15 +78,11 @@ function RoomPage() {
   const advanceTimer = useRef(null);
   const roundStartedAt = useRef(0);
 
-  // Host-only authoritative state. Never rendered — showing the pool would put
-  // every answer on screen.
-  const poolSongs = useRef([]);
-  const contributions = useRef([]);
-  const roundList = useRef([]);
-  const roundIndex = useRef(-1);
-  const roundResults = useRef(new Map());
-  const totalsRef = useRef(new Map());
-  const redrawnFor = useRef(-1);
+  // Host-only authoritative state, all of it inside the engine. Never rendered —
+  // showing the pool would put every answer on screen. The engine is React-free
+  // and lives in lib/roomHost.js; this page only relays what it emits.
+  const host = useRef(null);
+  if (isHost && !host.current) host.current = createHost({ mode: "shared" });
   const knownIds = useRef(new Set());
 
   // Mirrors of state that memo-free handlers need to read without going stale.
@@ -122,113 +115,48 @@ function RoomPage() {
 
   /* ---------------- Host: build the round list and drive rounds ---------------- */
 
-  function standingsFromRef() {
-    return sortStandings(
-      rosterRef.current.map((p) => {
-        const t = totalsRef.current.get(p.id) || { score: 0, timeMs: 0 };
-        return { id: p.id, name: p.name, score: t.score, timeMs: t.timeMs };
-      })
-    );
-  }
-
-  function broadcastRound(index, song) {
-    conn.current?.send("round", {
-      index,
-      song,
-      startAt: pickStartOffset(),
-      capMs: ROUND_CAP_MS,
-    });
+  // The engine decides what happens; the page just puts it on the wire.
+  function emit(directive) {
+    if (!directive) return;
+    conn.current?.send(directive.event, directive.payload);
   }
 
   function nextRound() {
     clearTimeout(advanceTimer.current);
-    const i = roundIndex.current + 1;
-    if (i >= roundList.current.length) {
-      conn.current?.send("end", {
-        totals: standingsFromRef(),
-        poolName: poolNameRef.current,
-        rounds: roundList.current.length,
-      });
-      return;
-    }
-    roundIndex.current = i;
-    roundResults.current = new Map();
-    redrawnFor.current = -1;
-    broadcastRound(i, roundList.current[i].song);
+    emit(host.current?.next());
   }
 
   function startGame() {
-    const list = buildRoundList({
-      poolSongs: poolSongs.current,
-      contributions: contributions.current,
-      rounds,
-    });
-    if (list.length < 1) return;
-    roundList.current = list;
-    roundIndex.current = -1;
-    roundResults.current = new Map();
-    totalsRef.current = new Map();
+    const h = host.current;
+    if (!h || h.poolSize() < MIN_POOL_SIZE) return;
     knownIds.current = new Set(rosterRef.current.map((p) => p.id));
 
     conn.current?.send("pool", {
-      count: poolSongs.current.length + contributions.current.length,
+      count: h.poolSize(),
       poolName: poolNameRef.current,
       locked: true,
     });
     conn.current?.send("start", {
-      rounds: list.length,
+      rounds,
       poolName: poolNameRef.current,
       poolSpec: packId
         ? { type: "pack", id: packId }
         : { type: "artist", name: artistName },
     });
-    nextRound();
+
+    const names = Object.fromEntries(rosterRef.current.map((p) => [p.id, p.name]));
+    emit(h.start({ rounds, names }));
   }
 
   function closeRound() {
     clearTimeout(capTimer.current);
-    const entry = roundList.current[roundIndex.current];
-    const contributedById = entry?.contributedBy || null;
-
-    const results = rosterRef.current.map((p) => {
-      const r = roundResults.current.get(p.id);
-      const selfPick = contributedById === p.id;
-      const won = !!r?.won;
-      const guessCount = r?.guessCount ?? 6;
-      const points = scoreForResult({ won, guessCount, isSelfPick: selfPick });
-      const prev = totalsRef.current.get(p.id) || { score: 0, timeMs: 0 };
-      totalsRef.current.set(p.id, {
-        score: prev.score + points,
-        timeMs: prev.timeMs + (r?.ms ?? ROUND_CAP_MS),
-      });
-      return {
-        playerId: p.id,
-        name: p.name,
-        won,
-        guessCount,
-        points,
-        selfPick,
-        missing: !r,
-      };
-    });
-
-    const byName = contributedById
-      ? rosterRef.current.find((p) => p.id === contributedById)?.name || null
-      : null;
-
-    conn.current?.send("scores", {
-      index: roundIndex.current,
-      contributedBy: byName,
-      results,
-      totals: standingsFromRef(),
-    });
+    emit(host.current?.close(rosterRef.current));
   }
 
   function maybeCloseRound() {
-    if (roundIndex.current < 0) return;
-    const present = rosterRef.current.map((p) => p.id);
-    if (!present.length) return;
-    if (present.every((id) => roundResults.current.has(id))) closeRound();
+    const h = host.current;
+    if (!h || h.roundIndex() < 0) return;
+    if (h.hasAllReports(rosterRef.current.map((p) => p.id))) closeRound();
   }
 
   /* ---------------- Channel events ---------------- */
@@ -247,13 +175,11 @@ function RoomPage() {
     if (event === "add" && isHost) {
       // The host is the authority on the pool, so the per-player cap is enforced
       // here too — not only in the sender's UI.
-      const already = contributions.current.filter((c) => c.by === payload.playerId).length;
-      if (already >= MAX_CONTRIBUTIONS_PER_PLAYER) return;
-      contributions.current = dedupeContributions(
-        [...contributions.current, { song: payload.song, by: payload.playerId, byName: payload.name }],
-        poolSongs.current
-      );
-      publishPool(poolSongs.current, poolNameRef.current);
+      const h = host.current;
+      if (h.contributionCount(payload.playerId) >= MAX_CONTRIBUTIONS_PER_PLAYER) return;
+      h.addContribution({ song: payload.song, by: payload.playerId, byName: payload.name });
+      h.setContributions(dedupeContributions(h.contributions(), h.pool()));
+      publishPool();
       return;
     }
 
@@ -287,28 +213,16 @@ function RoomPage() {
     }
 
     if (event === "done" && isHost) {
-      if (payload.roundIndex !== roundIndex.current) return; // stale round
-      if (roundResults.current.has(payload.playerId)) return; // first report wins
-      roundResults.current.set(payload.playerId, payload);
+      // Stale-round and duplicate-report guards live in the engine.
+      host.current?.record(payload);
       maybeCloseRound();
       return;
     }
 
     if (event === "unplayable" && isHost) {
-      // Preview URLs are identical for everyone, so one dead report means the
-      // round is dead for all. Redraw once — a second failure would loop.
-      if (payload.roundIndex !== roundIndex.current) return;
-      if (redrawnFor.current === roundIndex.current) return;
-      redrawnFor.current = roundIndex.current;
-      poolSongs.current = poolSongs.current.filter((s) => s.id !== payload.songId);
-      const replacement = poolSongs.current.find(
-        (s) => !roundList.current.some((r) => r.song.id === s.id)
-      );
-      if (!replacement) return;
-      roundList.current[roundIndex.current] = { song: replacement, contributedBy: null };
-      roundResults.current = new Map();
+      if (payload.roundIndex !== host.current?.roundIndex()) return;
       clearTimeout(capTimer.current);
-      broadcastRound(roundIndex.current, replacement);
+      emit(host.current?.replaceDeadSong(payload.songId));
       return;
     }
 
@@ -368,21 +282,21 @@ function RoomPage() {
     for (const p of players) {
       if (knownIds.current.has(p.id)) continue;
       knownIds.current.add(p.id);
-      if (roundIndex.current < 0) continue; // still in the lobby, nothing to sync
+      if (host.current.roundIndex() < 0) continue; // still in the lobby, nothing to sync
       conn.current?.send("sync", {
         toPlayerId: p.id,
-        totalRounds: roundList.current.length,
+        totalRounds: host.current.totalRounds(),
         poolName: poolNameRef.current,
         poolSpec: packId
           ? { type: "pack", id: packId }
           : { type: "artist", name: artistName },
-        index: roundIndex.current,
-        song: roundList.current[roundIndex.current]?.song,
+        index: host.current.roundIndex(),
+        song: host.current.currentEntry()?.song,
         // A rejoining player hears the clip from the start rather than an
         // offset they never heard the beginning of.
         startAt: 0,
         capMs: ROUND_CAP_MS,
-        totals: standingsFromRef(),
+        totals: host.current.standings(rosterRef.current),
       });
     }
 
@@ -395,8 +309,8 @@ function RoomPage() {
     if (phaseRef.current === "playing") maybeCloseRound();
 
     // A guest who joins after the pool was published would otherwise show 0.
-    if (phaseRef.current === "lobby" && poolSongs.current.length) {
-      publishPool(poolSongs.current, poolNameRef.current);
+    if (phaseRef.current === "lobby" && host.current.poolSize()) {
+      publishPool();
     }
   }
 
@@ -441,13 +355,14 @@ function RoomPage() {
   /* ---------------- Host: resolve the pool ---------------- */
 
   function publishPool(songs, label) {
-    const playable = (songs || []).filter((s) => s.previewUrl);
-    poolSongs.current = playable;
-    poolNameRef.current = label;
-    const total = playable.length + contributions.current.length;
-    setPoolCount(total);
-    setPoolName(label);
-    conn.current?.send("pool", { count: total, poolName: label, locked: false });
+    const h = host.current;
+    if (!h) return;
+    if (songs) h.setPool(songs);
+    const name = label ?? poolNameRef.current;
+    poolNameRef.current = name;
+    setPoolCount(h.poolSize());
+    setPoolName(name);
+    conn.current?.send("pool", { count: h.poolSize(), poolName: name, locked: false });
   }
 
   useEffect(() => {
