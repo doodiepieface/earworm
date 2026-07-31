@@ -169,7 +169,7 @@ stated rather than pretended.
 |---|---|
 | Two players want the same artist | Second sees it claimed and must pick another. Host arbitrates on `claim`, first claim wins. |
 | Artist resolves under 15 playable songs | That player cannot ready up; prompted to pick another artist. |
-| Owner leaves mid-game | Their remaining crossover rounds are dropped from the list; their phase-1 results stay in the standings up to that point. |
+| Owner leaves mid-game | Their crossover rounds still play, with the absent owner counted as a miss — so every remaining player can steal. Dropping the rounds instead would shorten the list after clients already received `totalRounds` at start, leaving the round counter wrong for everyone. Their phase-1 results stay in the standings. |
 | Fewer than 2 players ready | Start stays disabled. |
 | Deep cuts with 5+ players | Lobby warning before start — that is five simultaneous catalog walks through one proxy. |
 | A player's pool empties mid-game | Cannot happen: `MIN_SUPERFAN_POOL` (15) exceeds the 13 mastery rounds of the longest (20-round) game, so the shuffle bag never wraps. |
