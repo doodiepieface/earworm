@@ -77,7 +77,9 @@ export function createHost({ mode = "shared", random = Math.random } = {}) {
 
   function buildList() {
     if (s.mode === "superfan") {
-      const { mastery, finale } = splitPhases(s.rounds);
+      // Size the finale to the number of distinct artists, so each superfan gets
+      // at least one round on their own turf.
+      const { mastery, finale } = splitPhases(s.rounds, s.samples.size);
       const masteryRounds = Array.from({ length: mastery }, () => ({ kind: "mastery" }));
       const samples = [...s.samples.entries()].map(([playerId, songs]) => ({ playerId, songs }));
       s.list = [...masteryRounds, ...buildCrossoverList(samples, finale, s.random)];

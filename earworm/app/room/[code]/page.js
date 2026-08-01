@@ -4,6 +4,7 @@ import { Suspense, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { useParams, useRouter, useSearchParams } from "next/navigation";
 import RoundBoard from "@/components/RoundBoard";
+import RoundOutcome from "@/components/RoundOutcome";
 import Scoreboard from "@/components/Scoreboard";
 import { getPack } from "@/data/packs";
 import { joinRoom, isRoomsEnabled } from "@/lib/room";
@@ -36,6 +37,21 @@ import { getClient } from "@/lib/supabase";
 
 const MIN_POOL_SIZE = 4;
 const SCORE_AUTO_ADVANCE_MS = 8000;
+
+// The guess list is keyed on song id, so a repeated id makes React warn and can
+// drop rows. A crossover song can already be in your own pool (it's your artist
+// being played), and a deep catalog walk can surface the same track from two
+// albums — so both pools get deduped rather than trusting the source.
+function dedupeById(songs) {
+  const seen = new Set();
+  const out = [];
+  for (const s of songs || []) {
+    if (!s || seen.has(s.id)) continue;
+    seen.add(s.id);
+    out.push(s);
+  }
+  return out;
+}
 
 // The lobby and the game live in one component because they share the channel
 // connection and the host's authoritative state. The host's browser IS the
@@ -201,7 +217,7 @@ function RoomPage() {
       },
     });
 
-    const playable = collected.filter((s) => s.previewUrl).slice(0, cap);
+    const playable = dedupeById(collected.filter((s) => s.previewUrl)).slice(0, cap);
     myPool.current = playable;
     setResolving(false);
     setResolveNote("");
@@ -333,7 +349,7 @@ function RoomPage() {
           playerId: meId.current,
           songs: shuffled(myPool.current).slice(0, SUPERFAN_SAMPLE_SIZE),
         });
-        crossoverPool.current = [...myPool.current];
+        crossoverPool.current = dedupeById([...myPool.current]);
       }
       setLocked(true);
       setTotals([]);
@@ -350,7 +366,7 @@ function RoomPage() {
       // Crossover rounds need something local for the guess box to filter, so
       // fold each one into the pool as it arrives.
       if (roomModeRef.current === "superfan") {
-        crossoverPool.current = [...crossoverPool.current, payload.song];
+        crossoverPool.current = dedupeById([...crossoverPool.current, payload.song]);
       }
       setRound({
         key: `${payload.index}-${payload.song.id}-${Date.now()}`,
@@ -442,6 +458,15 @@ function RoomPage() {
     for (const p of players) {
       if (knownIds.current.has(p.id)) continue;
       knownIds.current.add(p.id);
+
+      // Broadcasts have no replay, so every claim sent before this player
+      // arrived is gone as far as they're concerned. The host holds them all,
+      // so re-send them to catch the newcomer up. Handlers key on playerId, so
+      // everyone else just re-applies what they already had.
+      if (roomModeRef.current === "superfan") {
+        for (const c of claimsRef.current) conn.current?.send("claim", c);
+      }
+
       if (host.current.roundIndex() < 0) continue; // still in the lobby, nothing to sync
       conn.current?.send("sync", {
         toPlayerId: p.id,
@@ -785,10 +810,12 @@ function RoomPage() {
           onUnplayable={handleRoundUnplayable}
         >
           {myResult && (
-            <p className="room-waiting">
-              {myResult.won ? `Got it in ${myResult.guessCount}.` : "Missed that one."}{" "}
-              Waiting for everyone else…
-            </p>
+            <RoundOutcome
+              won={myResult.won}
+              guessCount={myResult.guessCount}
+              song={round.song}
+              note="Waiting for everyone else…"
+            />
           )}
         </RoundBoard>
       </div>

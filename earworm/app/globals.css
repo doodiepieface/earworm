@@ -1095,13 +1095,21 @@ input[type="text"]:focus {
   margin-top: 22px;
 }
 
+/* A win should be unmistakable at a glance — the old treatment was a border
+   tint alone, which read almost identically to a loss. */
 .result-won {
-  border-color: rgba(94, 230, 168, 0.45);
-  box-shadow: 0 0 40px -14px rgba(94, 230, 168, 0.4);
+  border-color: rgba(94, 230, 168, 0.55);
+  background:
+    linear-gradient(rgba(94, 230, 168, 0.14), rgba(94, 230, 168, 0.05)),
+    var(--surface);
+  box-shadow: 0 0 52px -14px rgba(94, 230, 168, 0.5);
 }
 
 .result-lost {
-  border-color: rgba(255, 107, 107, 0.4);
+  border-color: rgba(255, 107, 107, 0.45);
+  background:
+    linear-gradient(rgba(255, 107, 107, 0.1), rgba(255, 107, 107, 0.03)),
+    var(--surface);
 }
 
 .result-verdict {
@@ -1784,4 +1792,50 @@ code {
   color: var(--accent);
   font-family: var(--font-display), serif;
   font-size: 1.05rem;
+}
+
+/* ---- Round outcome (multiplayer, between guessing and the scoreboard) ---- */
+
+.round-outcome {
+  margin-top: 22px;
+  display: grid;
+  gap: 14px;
+}
+
+.outcome-won {
+  border-color: rgba(94, 230, 168, 0.55);
+  background:
+    linear-gradient(rgba(94, 230, 168, 0.14), rgba(94, 230, 168, 0.05)),
+    var(--surface);
+  box-shadow: 0 0 52px -14px rgba(94, 230, 168, 0.5);
+}
+
+.outcome-lost {
+  border-color: rgba(255, 107, 107, 0.45);
+  background:
+    linear-gradient(rgba(255, 107, 107, 0.1), rgba(255, 107, 107, 0.03)),
+    var(--surface);
+}
+
+.outcome-verdict {
+  margin: 0;
+  font-family: var(--font-display), serif;
+  font-weight: 500;
+  font-size: 1.5rem;
+  line-height: 1.1;
+  letter-spacing: -0.015em;
+}
+
+.outcome-won .outcome-verdict {
+  color: var(--win);
+}
+
+.outcome-lost .outcome-verdict {
+  color: var(--wrong);
+}
+
+.outcome-note {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.9rem;
 }

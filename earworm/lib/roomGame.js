@@ -171,9 +171,17 @@ export const DEPTH_CAPS = { hits: 25, standard: 60, deep: Infinity };
 
 // Roughly two thirds mastery, one third crossover. The finale needs at least two
 // rounds to feel like a finale, and mastery needs at least one to mean anything.
-export function splitPhases(rounds) {
+//
+// `playerCount` (the number of distinct claimed artists) stretches the finale so
+// every superfan gets at least one round defending their own artist — a plain
+// one-third split gives a 5-round game only 2 crossover rounds, which silently
+// leaves the third player's artist unplayed. Mastery always keeps one round, so
+// a room with more players than rounds still can't feature everyone; the lobby
+// warns about that rather than this function pretending otherwise.
+export function splitPhases(rounds, playerCount = 0) {
   const total = Math.max(3, rounds || 0);
-  let finale = Math.max(2, Math.round(total / 3));
+  let finale = Math.max(2, Math.round(total / 3), playerCount || 0);
+  finale = Math.min(finale, total - 1);
   let mastery = total - finale;
   if (mastery < 1) {
     mastery = 1;
