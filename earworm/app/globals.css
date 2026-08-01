@@ -1760,3 +1760,28 @@ code {
     font-size: 0.8rem;
   }
 }
+
+/* ---- Superfan rounds & steals ---- */
+
+.sb-steal {
+  color: var(--accent);
+  font-family: var(--font-mono), monospace;
+  font-size: 0.66rem;
+  letter-spacing: 0.14em;
+  margin-left: 6px;
+}
+
+.sb-owner {
+  color: var(--muted);
+}
+
+.round-owner {
+  margin: 6px 0 0;
+  color: var(--muted);
+}
+
+.round-artist {
+  color: var(--accent);
+  font-family: var(--font-display), serif;
+  font-size: 1.05rem;
+}

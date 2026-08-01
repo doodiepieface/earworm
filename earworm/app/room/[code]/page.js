@@ -14,8 +14,14 @@ import {
   MAX_CONTRIBUTIONS_PER_PLAYER,
   DEFAULT_ROUNDS,
   ROUND_CAP_MS,
+  MIN_SUPERFAN_POOL,
+  SUPERFAN_SAMPLE_SIZE,
+  DEPTH_CAPS,
   dedupeContributions,
+  shuffled,
 } from "@/lib/roomGame";
+import { pickSong, pickStartOffset } from "@/lib/gameState";
+import SuperfanLobby from "@/components/SuperfanLobby";
 import { resolveTracks, streamArtistPool, searchGuesses } from "@/lib/itunes";
 import {
   getPlayerId,
@@ -44,6 +50,7 @@ function RoomPage() {
   const isHost = search.get("host") === "1";
   const packId = search.get("pack");
   const artistName = search.get("artist");
+  const mode = search.get("mode") === "superfan" ? "superfan" : "shared";
 
   // connecting | naming | lobby | playing | scores | ended | closed
   const [phase, setPhase] = useState("connecting");
@@ -71,6 +78,11 @@ function RoomPage() {
   const [lastScores, setLastScores] = useState(null);
   const [totals, setTotals] = useState([]);
 
+  // Superfan lobby
+  const [claims, setClaims] = useState([]);
+  const [depth, setDepth] = useState("standard");
+  const [resolveNote, setResolveNote] = useState("");
+
   const meId = useRef(null);
   const conn = useRef(null);
   const addDebounce = useRef(null);
@@ -82,8 +94,19 @@ function RoomPage() {
   // showing the pool would put every answer on screen. The engine is React-free
   // and lives in lib/roomHost.js; this page only relays what it emits.
   const host = useRef(null);
-  if (isHost && !host.current) host.current = createHost({ mode: "shared" });
+  if (isHost && !host.current) host.current = createHost({ mode });
   const knownIds = useRef(new Set());
+
+  // Superfan: this player's own artist pool. It is NEVER broadcast — mastery
+  // rounds carry no song, so each client picks locally from here. Only a small
+  // sample goes over the wire, for the crossover finale.
+  const myPool = useRef([]);
+  const myPlayed = useRef(new Set()); // shuffle-bag state across mastery rounds
+  const myLastId = useRef(null);
+  // Songs the guess box can offer during crossover rounds: this player's own
+  // catalog plus every crossover song seen so far.
+  const crossoverPool = useRef([]);
+  const claimsRef = useRef([]);
 
   // Mirrors of state that memo-free handlers need to read without going stale.
   const poolNameRef = useRef("");
@@ -97,6 +120,7 @@ function RoomPage() {
     rosterRef.current = roster;
     phaseRef.current = phase;
     roundRef.current = round;
+    claimsRef.current = claims;
   });
 
   /* ---------------- Identity ---------------- */
@@ -126,7 +150,58 @@ function RoomPage() {
     emit(host.current?.next());
   }
 
+  // Superfan: every player resolves their OWN artist in their OWN browser. That
+  // spread is what makes the mode viable — one host resolving five catalogs
+  // through the shared iTunes proxy would crawl.
+  async function claimArtist(artist) {
+    const cap = DEPTH_CAPS[depth] ?? DEPTH_CAPS.standard;
+    setResolveNote(`Pulling ${artist}…`);
+    setResolving(true);
+    myPool.current = [];
+    myPlayed.current = new Set();
+    myLastId.current = null;
+
+    const collected = [];
+    await streamArtistPool(artist, {
+      // Doubles as the depth cap: streamArtistPool checks this between album
+      // lookups, so a Hits game stops after roughly the first search instead of
+      // walking the whole discography.
+      isAborted: () => collected.length >= cap,
+      onSong: (song) => {
+        if (collected.length < cap) collected.push(song);
+        if (collected.length % 10 === 0) {
+          setResolveNote(`Pulling ${artist}… ${collected.length} songs`);
+        }
+      },
+    });
+
+    const playable = collected.filter((s) => s.previewUrl).slice(0, cap);
+    myPool.current = playable;
+    setResolving(false);
+    setResolveNote("");
+    conn.current?.send("claim", {
+      playerId: meId.current,
+      name,
+      artist,
+      songCount: playable.length,
+      ready: playable.length >= MIN_SUPERFAN_POOL,
+    });
+  }
+
+  function startSuperfanGame() {
+    const h = host.current;
+    const claimMap = Object.fromEntries(claimsRef.current.map((c) => [c.playerId, c.artist]));
+    const names = Object.fromEntries(rosterRef.current.map((p) => [p.id, p.name]));
+    knownIds.current = new Set(rosterRef.current.map((p) => p.id));
+
+    conn.current?.send("start", { rounds, poolName: "Superfan", poolSpec: null });
+    // Samples arrive as their own broadcasts in response to `start`; give them a
+    // moment to land before the crossover list is built out of them.
+    setTimeout(() => emit(h.start({ rounds, claims: claimMap, names })), 1500);
+  }
+
   function startGame() {
+    if (mode === "superfan") return startSuperfanGame();
     const h = host.current;
     if (!h || h.poolSize() < MIN_POOL_SIZE) return;
     knownIds.current = new Set(rosterRef.current.map((p) => p.id));
@@ -183,7 +258,57 @@ function RoomPage() {
       return;
     }
 
+    if (event === "claim") {
+      setClaims((prev) => {
+        const rest = prev.filter((c) => c.playerId !== payload.playerId);
+        return [...rest, payload].sort((a, b) => a.name.localeCompare(b.name));
+      });
+      return;
+    }
+
+    if (event === "sample" && isHost) {
+      host.current?.setSample(payload.playerId, payload.songs);
+      return;
+    }
+
+    if (event === "mastery") {
+      // No song came over the wire on purpose — pick our own, from our own pool.
+      const song = pickSong(myPool.current, myPlayed.current, myLastId.current);
+      myLastId.current = song?.id ?? null;
+      setRound({
+        key: `m-${payload.index}-${song?.id}-${Date.now()}`,
+        index: payload.index,
+        song,
+        startAt: pickStartOffset(),
+        capMs: payload.capMs,
+        kind: "mastery",
+        ownerName: null,
+        artist: null,
+      });
+      setForceEnd(false);
+      setMyResult(null);
+      setLastScores(null);
+      setPhase("playing");
+      roundStartedAt.current = Date.now();
+      clearTimeout(capTimer.current);
+      capTimer.current = setTimeout(() => {
+        setForceEnd(true);
+        if (isHost) closeRound();
+      }, payload.capMs);
+      return;
+    }
+
     if (event === "start") {
+      // Superfan: hand the host this player's slice of the crossover finale.
+      // Sent on `start` rather than on claim, so re-picking an artist can't
+      // leave a stale sample behind.
+      if (mode === "superfan" && myPool.current.length) {
+        conn.current?.send("sample", {
+          playerId: meId.current,
+          songs: shuffled(myPool.current).slice(0, SUPERFAN_SAMPLE_SIZE),
+        });
+        crossoverPool.current = [...myPool.current];
+      }
       setLocked(true);
       setTotals([]);
       setTotalRounds(payload.rounds);
@@ -196,7 +321,16 @@ function RoomPage() {
     }
 
     if (event === "round") {
-      setRound({ key: `${payload.index}-${payload.song.id}-${Date.now()}`, ...payload });
+      // Crossover rounds need something local for the guess box to filter, so
+      // fold each one into the pool as it arrives.
+      if (mode === "superfan") {
+        crossoverPool.current = [...crossoverPool.current, payload.song];
+      }
+      setRound({
+        key: `${payload.index}-${payload.song.id}-${Date.now()}`,
+        kind: "round",
+        ...payload,
+      });
       setForceEnd(false);
       setMyResult(null);
       setLastScores(null);
@@ -367,6 +501,8 @@ function RoomPage() {
 
   useEffect(() => {
     if (!isHost || phase !== "lobby") return;
+    // Superfan has no shared pool — every player resolves their own artist.
+    if (mode === "superfan") return;
     let aborted = false;
 
     async function preparePack() {
@@ -587,8 +723,15 @@ function RoomPage() {
           <p className="eyebrow">
             Round <strong>{round.index + 1}</strong>
             {totalRounds ? <span className="dim"> of {totalRounds}</span> : null}
+            {round.kind === "mastery" && <span className="dim"> · your artist</span>}
             <span className="dim"> · room {code}</span>
           </p>
+          {round.ownerName && (
+            <p className="round-owner">
+              ♪ from <strong>{round.ownerName}</strong>&rsquo;s artist —{" "}
+              <span className="round-artist">{round.artist}</span>
+            </p>
+          )}
         </div>
 
         <RoundBoard
@@ -597,6 +740,13 @@ function RoomPage() {
           startAt={round.startAt}
           forceEnd={forceEnd}
           capMs={round.capMs}
+          localSongs={
+            mode !== "superfan"
+              ? null
+              : round.kind === "mastery"
+              ? myPool.current
+              : crossoverPool.current
+          }
           onFinish={handleRoundFinish}
           onUnplayable={handleRoundUnplayable}
         >
@@ -620,6 +770,8 @@ function RoomPage() {
         <Scoreboard
           results={lastScores.results}
           contributedBy={lastScores.contributedBy}
+          ownerName={lastScores.ownerName}
+          artist={lastScores.artist}
           totals={lastScores.totals}
           meId={meId.current}
         />
@@ -667,8 +819,13 @@ function RoomPage() {
 
   /* ---------------- Lobby ---------------- */
 
+  const readyClaims = claims.filter((c) => c.ready);
   const canStart =
-    isHost && roster.length >= MIN_PLAYERS && poolCount >= MIN_POOL_SIZE && !preparing;
+    isHost &&
+    roster.length >= MIN_PLAYERS &&
+    (mode === "superfan"
+      ? readyClaims.length === roster.length
+      : poolCount >= MIN_POOL_SIZE && !preparing);
 
   return (
     <div className="page room">
@@ -696,16 +853,30 @@ function RoomPage() {
         </ul>
       </section>
 
-      <section className="section">
-        <p className="eyebrow">Pool</p>
-        <p>
-          <strong>{poolName || "…"}</strong>
-          <span className="dim"> · {poolCount} songs</span>
-          {preparing && <span className="dim"> · preparing…</span>}
-        </p>
-      </section>
+      {mode === "superfan" ? (
+        <SuperfanLobby
+          claims={claims}
+          meId={meId.current}
+          myClaim={claims.find((c) => c.playerId === meId.current) || null}
+          onClaim={claimArtist}
+          depth={depth}
+          onDepth={setDepth}
+          isHost={isHost}
+          resolving={resolving}
+          resolveNote={resolveNote}
+        />
+      ) : (
+        <section className="section">
+          <p className="eyebrow">Pool</p>
+          <p>
+            <strong>{poolName || "…"}</strong>
+            <span className="dim"> · {poolCount} songs</span>
+            {preparing && <span className="dim"> · preparing…</span>}
+          </p>
+        </section>
+      )}
 
-      {!locked && (
+      {mode !== "superfan" && !locked && (
         <section className="section">
           <p className="eyebrow">
             Add songs{" "}
@@ -787,10 +958,14 @@ function RoomPage() {
           </button>
           {!canStart && (
             <p className="dim">
-              {preparing
-                ? "Waiting for the pool to finish loading…"
-                : roster.length < MIN_PLAYERS
+              {roster.length < MIN_PLAYERS
                 ? `Need at least ${MIN_PLAYERS} players.`
+                : mode === "superfan"
+                ? `Waiting on ${roster.length - readyClaims.length} player${
+                    roster.length - readyClaims.length === 1 ? "" : "s"
+                  } to claim an artist…`
+                : preparing
+                ? "Waiting for the pool to finish loading…"
                 : "Not enough playable songs yet."}
             </p>
           )}

@@ -104,6 +104,19 @@ Live rooms at `/room` (host or join) and `/room/[code]` (lobby + game). Design a
 - **The 60s round cap is counted per client from its own receipt** of the `round` broadcast, so clock skew between phones can't shave anyone's timer. The host runs its own copy so an AFK player can't stall the room.
 - **No anti-cheat, deliberately.** Every client must know the answer to run `isCorrectGuess`, and each self-reports. Fine among friends; the alternative is server-side answer checking, which fights the app's entirely-client-side architecture.
 - `components/RoundBoard.jsx` is the shared single-round UI (dial + ladder + guess box), used by **both** `/play` and rooms so the rules can't drift. `app/play/page.js` keeps pool loading, the shuffle bag, and stats.
+- **`lib/roomHost.js` is the host-authority engine** — React-free, Supabase-free, DOM-free. It owns the pool, round list, results, and scoring for *both* room modes and returns **directives** (`{ event, payload }`) that the page relays verbatim via `conn.send`. Round and scoring logic belongs here, not in the page: it's the only part that can be driven end-to-end by a plain Node script.
+- `components/RoundTimer.jsx` draws the round countdown but does **not** enforce it — the page still owns the authoritative cap timer and settles via `RoundBoard`'s `forceEnd`. Both anchor on the same round mount (RoundBoard is keyed per round), which is why the bar and the cutoff agree. It renders only when `capMs > 0`, so solo play never shows one.
+
+### Superfan mode
+
+A second room mode (`/room/<CODE>?host=1&mode=superfan`) where every player claims **their own artist**.
+
+- **Two phases.** `splitPhases(rounds)` gives roughly two thirds **mastery** (each player hears songs from their own artist, simultaneously but separately) and one third **crossover** (everyone on the same song, drawn round-robin from the claimed artists). Finale is never under 2 rounds, mastery never under 1.
+- **Mastery rounds carry no song over the wire.** The host broadcasts only `mastery { index, capMs }`; each client picks its own next song locally from its own pool via the existing shuffle bag. This makes mastery rounds *more* private than shared-mode rounds — those songs are never broadcast at all. Crossover songs are broadcast and so are visible in devtools, same no-anti-cheat posture as everywhere else.
+- **Crossover scoring — the owner defends, outsiders steal.** The owner scores the normal `7 − N`. A non-owner who won with *strictly fewer* guesses than the owner (or when the owner missed) scores **double**. Ties don't steal. An owner who left the room counts as a miss, so everyone can steal — the round still plays rather than being dropped, because splicing the list would break the `totalRounds` clients already received.
+- **One claim per artist.** Shared ownership would make "the owner" of a crossover round ambiguous.
+- **`MIN_SUPERFAN_POOL = 15` is not arbitrary:** the longest game (20 rounds) is 13 mastery rounds, and a smaller pool would exhaust the shuffle bag and repeat songs inside one game.
+- **Depth (`DEPTH_CAPS`: hits 25 / standard 60 / deep ∞) is one room-wide setting**, and it is doing two jobs. Fairness — an equal cap keeps a 30-song artist comparable to a 400-song one. And throughput — it's passed as `streamArtistPool`'s `isAborted`, so a Hits game stops after roughly the first search instead of walking a whole discography. Every player resolves their own artist in their own browser; without the cap, five simultaneous deep walks through the single shared iTunes proxy would crawl.
 
 ## SEO & metadata
 
