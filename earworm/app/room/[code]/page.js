@@ -78,9 +78,12 @@ function RoomPage() {
   const [lastScores, setLastScores] = useState(null);
   const [totals, setTotals] = useState([]);
 
-  // Superfan lobby
+  // Superfan lobby. `resolving` is this player pulling their OWN artist, which
+  // is distinct from `preparing` (the host pulling the shared pool) — different
+  // modes, different actors, so they stay separate flags.
   const [claims, setClaims] = useState([]);
   const [depth, setDepth] = useState("standard");
+  const [resolving, setResolving] = useState(false);
   const [resolveNote, setResolveNote] = useState("");
 
   const meId = useRef(null);
