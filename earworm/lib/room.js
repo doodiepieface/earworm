@@ -33,6 +33,12 @@ export const ROOM_EVENTS = [
   "scores", // host -> all:    { index, contributedBy, results, totals }
   "sync", // host -> one:    { toPlayerId, ...full state }
   "end", // host -> all:    { totals, poolName, rounds }
+
+  // Superfan mode
+  "claim", // player -> all:  { playerId, name, artist, songCount, ready }
+  "sample", // player -> host: { playerId, songs } — the crossover contribution
+  "mastery", // host -> all:   { index, capMs } — deliberately carries NO song,
+  //                            each client picks its own from its own pool
 ];
 
 // `self` is { id, name, isHost }. `onEvent(event, payload)` receives every

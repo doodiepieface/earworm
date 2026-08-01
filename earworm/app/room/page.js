@@ -121,7 +121,24 @@ export default function RoomEntryPage() {
       </section>
 
       <section className="section">
-        <p className="eyebrow">Or host one — pick a pack</p>
+        <p className="eyebrow">Or host a superfan showdown</p>
+        <p className="dim">
+          Everyone picks their own artist and finds out who really knows theirs.
+        </p>
+        <button
+          type="button"
+          className="btn btn-primary"
+          onClick={() => {
+            if (!commitName()) return;
+            router.push(`/room/${makeRoomCode()}?host=1&mode=superfan`);
+          }}
+        >
+          Host superfan mode
+        </button>
+      </section>
+
+      <section className="section">
+        <p className="eyebrow">Or host a shared pool — pick a pack</p>
         <div className="grid">
           {packs.map((p) => (
             <button

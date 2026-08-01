@@ -1708,3 +1708,55 @@ code {
     animation: none;
   }
 }
+
+/* ---- Superfan claims ---- */
+
+.claims {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: grid;
+  gap: 2px;
+}
+
+.claims li {
+  display: grid;
+  grid-template-columns: 1fr 1.2fr auto;
+  gap: 12px;
+  align-items: baseline;
+  padding: 8px 0;
+  border-bottom: 1px solid var(--line);
+}
+
+.claims li:last-child {
+  border-bottom: 0;
+}
+
+.claims li.me {
+  color: var(--ink);
+  font-weight: 600;
+}
+
+.claim-who {
+  color: var(--muted);
+}
+
+.claim-artist {
+  font-family: var(--font-display), serif;
+  font-size: 1.05rem;
+}
+
+.claim-state {
+  color: var(--muted);
+  font-size: 0.8rem;
+}
+
+@media (max-width: 520px) {
+  .claims li {
+    grid-template-columns: 1fr auto;
+  }
+  .claim-who {
+    grid-column: 1 / -1;
+    font-size: 0.8rem;
+  }
+}
