@@ -39,6 +39,9 @@ export const ROOM_EVENTS = [
   "sample", // player -> host: { playerId, songs } — the crossover contribution
   "mastery", // host -> all:   { index, capMs } — deliberately carries NO song,
   //                            each client picks its own from its own pool
+
+  "reset", // host -> all:    {} — everyone back to the lobby, same room,
+  //                            same players, so the host can pick a new pool
 ];
 
 // `self` is { id, name, isHost }. `onEvent(event, payload)` receives every

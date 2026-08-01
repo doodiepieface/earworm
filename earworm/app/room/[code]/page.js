@@ -6,7 +6,7 @@ import { useParams, useRouter, useSearchParams } from "next/navigation";
 import RoundBoard from "@/components/RoundBoard";
 import RoundOutcome from "@/components/RoundOutcome";
 import Scoreboard from "@/components/Scoreboard";
-import { getPack } from "@/data/packs";
+import packs, { getPack } from "@/data/packs";
 import { joinRoom, isRoomsEnabled } from "@/lib/room";
 import { createHost } from "@/lib/roomHost";
 import {
@@ -94,6 +94,16 @@ function RoomPage() {
   const [lastScores, setLastScores] = useState(null);
   const [totals, setTotals] = useState([]);
 
+  // The chosen pool starts from the host's URL but lives in state, so "new pool,
+  // same room" can change it without a re-navigation. Re-navigating would drop
+  // the host from presence for a moment, and every guest's host-left check would
+  // fire and close the room out from under them.
+  const [poolChoice, setPoolChoice] = useState(() =>
+    packId ? { type: "pack", id: packId } : artistName ? { type: "artist", name: artistName } : null
+  );
+  const [newArtist, setNewArtist] = useState("");
+  const poolChoiceRef = useRef(null);
+
   // Superfan lobby. `resolving` is this player pulling their OWN artist, which
   // is distinct from `preparing` (the host pulling the shared pool) — different
   // modes, different actors, so they stay separate flags.
@@ -154,6 +164,7 @@ function RoomPage() {
     claimsRef.current = claims;
     roomModeRef.current = roomMode;
     roomDepthRef.current = roomDepth;
+    poolChoiceRef.current = poolChoice;
   });
 
   // Host only: re-publish presence when the depth selector changes, so every
@@ -256,9 +267,7 @@ function RoomPage() {
     conn.current?.send("start", {
       rounds,
       poolName: poolNameRef.current,
-      poolSpec: packId
-        ? { type: "pack", id: packId }
-        : { type: "artist", name: artistName },
+      poolSpec: poolChoiceRef.current,
     });
 
     const names = Object.fromEntries(rosterRef.current.map((p) => [p.id, p.name]));
@@ -446,6 +455,45 @@ function RoomPage() {
       recordRoomHistory(payload);
       return;
     }
+
+    if (event === "reset") {
+      // Same room, same code, same people — only the pool goes. Everything the
+      // finished game left behind has to clear, or the next one inherits it.
+      clearTimeout(capTimer.current);
+      clearTimeout(advanceTimer.current);
+      setRound(null);
+      setMyResult(null);
+      setForceEnd(false);
+      setLastScores(null);
+      setTotals([]);
+      setTotalRounds(0);
+      setLocked(false);
+      setMyAdds([]);
+      setAddQuery("");
+      setAddResults([]);
+      setPoolCount(0);
+      setPoolName("");
+      setNotice("");
+      setPhase("lobby");
+
+      if (roomModeRef.current === "superfan") {
+        // Everyone re-claims, so drop the old artist and its shuffle-bag state.
+        setClaims([]);
+        myPool.current = [];
+        myPlayed.current = new Set();
+        myLastId.current = null;
+        crossoverPool.current = [];
+      }
+
+      if (isHost) {
+        // A fresh engine: the old one still holds the finished round list and
+        // every player's running total.
+        host.current = createHost({ mode });
+        setPoolChoice(null);
+        setNewArtist("");
+      }
+      return;
+    }
   }
 
   function handleRoster(players) {
@@ -472,9 +520,7 @@ function RoomPage() {
         toPlayerId: p.id,
         totalRounds: host.current.totalRounds(),
         poolName: poolNameRef.current,
-        poolSpec: packId
-          ? { type: "pack", id: packId }
-          : { type: "artist", name: artistName },
+        poolSpec: poolChoiceRef.current,
         index: host.current.roundIndex(),
         song: host.current.currentEntry()?.song,
         // A rejoining player hears the clip from the start rather than an
@@ -562,10 +608,12 @@ function RoomPage() {
     if (!isHost || phase !== "lobby") return;
     // Superfan has no shared pool — every player resolves their own artist.
     if (mode === "superfan") return;
+    // No pool chosen yet: the host is at the picker after "new pool, same room".
+    if (!poolChoice) return;
     let aborted = false;
 
     async function preparePack() {
-      const pack = getPack(packId);
+      const pack = getPack(poolChoice.id);
       if (!pack) {
         setNotice("That pack no longer exists.");
         return;
@@ -589,28 +637,27 @@ function RoomPage() {
     async function prepareArtist() {
       setPreparing(true);
       const collected = [];
-      await streamArtistPool(artistName, {
+      await streamArtistPool(poolChoice.name, {
         isAborted: () => aborted,
         onSong: (song) => {
           collected.push(song);
           // Republish periodically so the lobby count visibly climbs.
-          if (collected.length % 10 === 0) publishPool(collected, artistName);
+          if (collected.length % 10 === 0) publishPool(collected, poolChoice.name);
         },
       });
       if (aborted) return;
-      publishPool(collected, artistName);
+      publishPool(collected, poolChoice.name);
       setPreparing(false);
     }
 
-    if (packId) preparePack();
-    else if (artistName) prepareArtist();
-    else setNotice("This room has no pool — the host link is missing a pack or artist.");
+    if (poolChoice.type === "pack") preparePack();
+    else if (poolChoice.type === "artist") prepareArtist();
 
     return () => {
       aborted = true;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isHost, phase, packId, artistName]);
+  }, [isHost, phase, mode, poolChoice]);
 
   /* ---------------- Contributions ---------------- */
 
@@ -863,9 +910,18 @@ function RoomPage() {
         <Scoreboard totals={totals} meId={meId.current} final />
         <div className="room-actions">
           {isHost && (
-            <button type="button" className="btn btn-primary" onClick={startGame}>
-              Play again
-            </button>
+            <>
+              <button type="button" className="btn btn-primary" onClick={startGame}>
+                Play again
+              </button>
+              <button
+                type="button"
+                className="btn btn-ghost"
+                onClick={() => conn.current?.send("reset", {})}
+              >
+                {roomMode === "superfan" ? "New artists, same room" : "New pool, same room"}
+              </button>
+            </>
           )}
           <button type="button" className="btn btn-ghost" onClick={replayPoolSolo}>
             Replay this pool solo
@@ -928,7 +984,53 @@ function RoomPage() {
         />
       )}
 
-      {roomMode === "shared" && (
+      {roomMode === "shared" && isHost && !poolChoice && (
+        <>
+          <section className="section">
+            <p className="eyebrow">Pick a pack</p>
+            <div className="grid">
+              {packs.map((p) => (
+                <button
+                  key={p.id}
+                  type="button"
+                  className="card pool-card"
+                  onClick={() => setPoolChoice({ type: "pack", id: p.id })}
+                >
+                  <span className="pool-name">{p.name}</span>
+                  <span className="pool-blurb">{p.blurb}</span>
+                  <span className="pool-count mono">{p.tracks.length} songs</span>
+                </button>
+              ))}
+            </div>
+          </section>
+
+          <section className="section">
+            <p className="eyebrow">Or an artist</p>
+            <form
+              className="artist-form"
+              onSubmit={(e) => {
+                e.preventDefault();
+                const a = newArtist.trim();
+                if (a) setPoolChoice({ type: "artist", name: a });
+              }}
+            >
+              <input
+                type="text"
+                value={newArtist}
+                placeholder="Any artist…"
+                autoComplete="off"
+                aria-label="Artist for the next round"
+                onChange={(e) => setNewArtist(e.target.value)}
+              />
+              <button type="submit" className="btn btn-ghost" disabled={!newArtist.trim()}>
+                Use artist
+              </button>
+            </form>
+          </section>
+        </>
+      )}
+
+      {roomMode === "shared" && (!isHost || poolChoice) && (
         <section className="section">
           <p className="eyebrow">Pool</p>
           <p>
