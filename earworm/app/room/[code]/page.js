@@ -118,13 +118,34 @@ function RoomPage() {
   const phaseRef = useRef("connecting");
   const roundRef = useRef(null);
 
+  // The room's mode and depth are the HOST's — a joiner's URL is a bare
+  // /room/CODE with no query params at all, so reading them from `search` would
+  // silently give every guest the shared-pool lobby. They come off the host's
+  // presence entry instead. Undefined until presence settles, which is why the
+  // lobby renders neither mode's sections until it resolves.
+  const hostEntry = roster.find((p) => p.isHost);
+  const roomMode = isHost ? mode : hostEntry?.mode || undefined;
+  const roomDepth = isHost ? depth : hostEntry?.depth || "standard";
+
+  const roomModeRef = useRef(undefined);
+  const roomDepthRef = useRef("standard");
+
   useEffect(() => {
     poolNameRef.current = poolName;
     rosterRef.current = roster;
     phaseRef.current = phase;
     roundRef.current = round;
     claimsRef.current = claims;
+    roomModeRef.current = roomMode;
+    roomDepthRef.current = roomDepth;
   });
+
+  // Host only: re-publish presence when the depth selector changes, so every
+  // client resolves its artist against the same cap.
+  useEffect(() => {
+    if (!isHost || !conn.current) return;
+    conn.current.track({ mode, depth });
+  }, [isHost, mode, depth, phase]);
 
   /* ---------------- Identity ---------------- */
 
@@ -157,7 +178,9 @@ function RoomPage() {
   // spread is what makes the mode viable — one host resolving five catalogs
   // through the shared iTunes proxy would crawl.
   async function claimArtist(artist) {
-    const cap = DEPTH_CAPS[depth] ?? DEPTH_CAPS.standard;
+    // The host's depth, not this client's local default — an unequal cap would
+    // quietly break the fairness the setting exists to provide.
+    const cap = DEPTH_CAPS[roomDepthRef.current] ?? DEPTH_CAPS.standard;
     setResolveNote(`Pulling ${artist}…`);
     setResolving(true);
     myPool.current = [];
@@ -305,7 +328,7 @@ function RoomPage() {
       // Superfan: hand the host this player's slice of the crossover finale.
       // Sent on `start` rather than on claim, so re-picking an artist can't
       // leave a stale sample behind.
-      if (mode === "superfan" && myPool.current.length) {
+      if (roomModeRef.current === "superfan" && myPool.current.length) {
         conn.current?.send("sample", {
           playerId: meId.current,
           songs: shuffled(myPool.current).slice(0, SUPERFAN_SAMPLE_SIZE),
@@ -326,7 +349,7 @@ function RoomPage() {
     if (event === "round") {
       // Crossover rounds need something local for the guess box to filter, so
       // fold each one into the pool as it arrives.
-      if (mode === "superfan") {
+      if (roomModeRef.current === "superfan") {
         crossoverPool.current = [...crossoverPool.current, payload.song];
       }
       setRound({
@@ -466,7 +489,15 @@ function RoomPage() {
     if (!name || !meId.current || phase === "closed") return;
 
     const c = joinRoom(code, {
-      self: { id: meId.current, name, isHost },
+      // Only the host's URL carries ?mode= and the depth selector, so both ride
+      // in presence for everyone else to read off the host's entry.
+      self: {
+        id: meId.current,
+        name,
+        isHost,
+        mode: isHost ? mode : null,
+        depth: isHost ? depth : null,
+      },
       onEvent: (e, p) => eventHandler.current(e, p),
       onRoster: (r) => rosterHandler.current(r),
     });
@@ -744,7 +775,7 @@ function RoomPage() {
           forceEnd={forceEnd}
           capMs={round.capMs}
           localSongs={
-            mode !== "superfan"
+            roomMode !== "superfan"
               ? null
               : round.kind === "mastery"
               ? myPool.current
@@ -856,19 +887,21 @@ function RoomPage() {
         </ul>
       </section>
 
-      {mode === "superfan" ? (
+      {roomMode === "superfan" && (
         <SuperfanLobby
           claims={claims}
           meId={meId.current}
           myClaim={claims.find((c) => c.playerId === meId.current) || null}
           onClaim={claimArtist}
-          depth={depth}
+          depth={roomDepth}
           onDepth={setDepth}
           isHost={isHost}
           resolving={resolving}
           resolveNote={resolveNote}
         />
-      ) : (
+      )}
+
+      {roomMode === "shared" && (
         <section className="section">
           <p className="eyebrow">Pool</p>
           <p>
@@ -879,7 +912,9 @@ function RoomPage() {
         </section>
       )}
 
-      {mode !== "superfan" && !locked && (
+      {roomMode === undefined && <p className="dim">Finding the host…</p>}
+
+      {roomMode === "shared" && !locked && (
         <section className="section">
           <p className="eyebrow">
             Add songs{" "}

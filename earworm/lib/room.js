@@ -83,7 +83,17 @@ export function joinRoom(code, { self, onEvent, onRoster }) {
     const players = Object.values(state)
       .map((metas) => metas[0])
       .filter(Boolean)
-      .map((m) => ({ id: m.id, name: m.name, isHost: !!m.isHost }));
+      // `mode` and `depth` are room-wide settings that only the host knows —
+      // a joiner's URL is a bare /room/CODE. Carrying them in presence means
+      // every client reads them off the host's entry, late joiners included,
+      // with no extra message and no request/response round trip.
+      .map((m) => ({
+        id: m.id,
+        name: m.name,
+        isHost: !!m.isHost,
+        mode: m.mode || null,
+        depth: m.depth || null,
+      }));
     onRoster?.(players);
   });
 
@@ -96,6 +106,12 @@ export function joinRoom(code, { self, onEvent, onRoster }) {
   return {
     send(event, payload) {
       return channel.send({ type: "broadcast", event, payload });
+    },
+    // Re-publish this client's presence metadata. The host uses it when a
+    // room-wide setting changes (e.g. the depth selector) so everyone —
+    // including whoever joins next — reads the current value.
+    track(meta) {
+      return channel.track({ ...self, ...meta });
     },
     leave() {
       try {
