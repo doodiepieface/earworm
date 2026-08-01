@@ -1,5 +1,7 @@
 "use client";
 
+import { withAppleAffiliate } from "@/lib/site";
+
 // What you see the moment your own round ends in a room, before the scoreboard.
 //
 // Multiplayer used to show a single line of grey text here — no colour, no
@@ -29,7 +31,23 @@ export default function RoundOutcome({ won, guessCount, song, note }) {
         </div>
       </div>
 
-      {note && <p className="outcome-note">{note}</p>}
+      <div className="outcome-actions">
+        {/* Apple's terms expect this attribution wherever we surface a preview,
+            so a room round earns it just as much as a solo one. Absent only for
+            songs matched before appleUrl was carried through. */}
+        {song?.appleUrl && (
+          <a
+            className="apple-link"
+            href={withAppleAffiliate(song.appleUrl)}
+            target="_blank"
+            rel="noopener noreferrer"
+          >
+            Listen on Apple Music
+            <span aria-hidden="true"> ↗</span>
+          </a>
+        )}
+        {note && <p className="outcome-note">{note}</p>}
+      </div>
     </div>
   );
 }

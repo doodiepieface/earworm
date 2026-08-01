@@ -1834,6 +1834,14 @@ code {
   color: var(--wrong);
 }
 
+.outcome-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  flex-wrap: wrap;
+}
+
 .outcome-note {
   margin: 0;
   color: var(--muted);
