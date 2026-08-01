@@ -29,6 +29,10 @@
 
   --win: #5ee6a8;
   --wrong: #ff6b6b;
+  /* The warm end of --spectrum, named so the round timer can step through
+     accent → warn → wrong without introducing a colour the palette didn't
+     already contain. */
+  --warn: #ffb454;
 
   --radius: 16px;
   --radius-sm: 10px;
@@ -1637,5 +1641,70 @@ code {
   .room-code {
     letter-spacing: 0.22em;
     text-indent: 0.22em;
+  }
+}
+
+/* ---------------- Round timer (multiplayer only) ---------------- */
+
+.round-timer {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin: 18px 0 10px;
+}
+
+.rt-track {
+  flex: 1;
+  height: 6px;
+  border-radius: var(--pill);
+  background: var(--surface-2);
+  overflow: hidden;
+}
+
+.rt-fill {
+  height: 100%;
+  border-radius: var(--pill);
+  background: var(--accent);
+  /* Matches the 100ms tick, so the bar glides instead of stepping. `width` is
+     the only animatable property here because the track clips it. */
+  transition: width 100ms linear, background-color 400ms ease;
+}
+
+.rt-readout {
+  color: var(--muted);
+  font-size: 0.85rem;
+  min-width: 3.2ch;
+  text-align: right;
+  transition: color 400ms ease;
+}
+
+.round-timer.is-warn .rt-fill {
+  background: var(--warn);
+}
+
+.round-timer.is-warn .rt-readout {
+  color: var(--warn);
+}
+
+.round-timer.is-urgent .rt-fill {
+  background: var(--wrong);
+}
+
+.round-timer.is-urgent .rt-readout {
+  color: var(--wrong);
+  animation: rt-pulse 1s ease-in-out infinite;
+}
+
+@keyframes rt-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.45; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .rt-fill {
+    transition: none;
+  }
+  .round-timer.is-urgent .rt-readout {
+    animation: none;
   }
 }

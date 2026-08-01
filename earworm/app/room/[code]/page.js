@@ -596,6 +596,7 @@ function RoomPage() {
           song={round.song}
           startAt={round.startAt}
           forceEnd={forceEnd}
+          capMs={round.capMs}
           onFinish={handleRoundFinish}
           onUnplayable={handleRoundUnplayable}
         >
