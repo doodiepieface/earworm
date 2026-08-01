@@ -37,6 +37,10 @@ import { getClient } from "@/lib/supabase";
 
 const MIN_POOL_SIZE = 4;
 const SCORE_AUTO_ADVANCE_MS = 8000;
+// Breathing room between the last answer and the scoreboard. Without it the
+// person who finishes last sees the song they just guessed for a few
+// milliseconds before being yanked to the standings.
+const REVEAL_MS = 2000;
 
 // The guess list is keyed on song id, so a repeated id makes React warn and can
 // drop rows. A crossover song can already be in your own pool (it's your artist
@@ -117,7 +121,10 @@ function RoomPage() {
   const addDebounce = useRef(null);
   const capTimer = useRef(null);
   const advanceTimer = useRef(null);
+  const revealTimer = useRef(null);
   const roundStartedAt = useRef(0);
+  // Highest round index already scored, so a round can't be closed twice.
+  const closedFor = useRef(-1);
 
   // Host-only authoritative state, all of it inside the engine. Never rendered —
   // showing the pool would put every answer on screen. The engine is React-free
@@ -242,6 +249,7 @@ function RoomPage() {
   }
 
   function startSuperfanGame() {
+    closedFor.current = -1;
     const h = host.current;
     const claimMap = Object.fromEntries(claimsRef.current.map((c) => [c.playerId, c.artist]));
     const names = Object.fromEntries(rosterRef.current.map((p) => [p.id, p.name]));
@@ -254,6 +262,7 @@ function RoomPage() {
   }
 
   function startGame() {
+    closedFor.current = -1;
     if (mode === "superfan") return startSuperfanGame();
     const h = host.current;
     if (!h || h.poolSize() < MIN_POOL_SIZE) return;
@@ -274,15 +283,30 @@ function RoomPage() {
     emit(h.start({ rounds, names }));
   }
 
+  // Idempotent per round. Two paths can close a round — everyone answering, and
+  // the 60s cap expiring — and with the reveal delay below they can now overlap.
+  // Closing twice would run the engine's scoring twice and double every total.
   function closeRound() {
+    const h = host.current;
+    if (!h) return;
+    const idx = h.roundIndex();
+    if (idx < 0 || closedFor.current === idx) return;
+    closedFor.current = idx;
     clearTimeout(capTimer.current);
-    emit(host.current?.close(rosterRef.current));
+    clearTimeout(revealTimer.current);
+    emit(h.close(rosterRef.current));
   }
 
+  // Everyone has answered — but whoever finished last has only just seen the
+  // answer. Hold the scoreboard back briefly so they get to read it, instead of
+  // being thrown straight into the standings.
   function maybeCloseRound() {
     const h = host.current;
     if (!h || h.roundIndex() < 0) return;
-    if (h.hasAllReports(rosterRef.current.map((p) => p.id))) closeRound();
+    if (closedFor.current === h.roundIndex()) return;
+    if (!h.hasAllReports(rosterRef.current.map((p) => p.id))) return;
+    clearTimeout(revealTimer.current);
+    revealTimer.current = setTimeout(closeRound, REVEAL_MS);
   }
 
   /* ---------------- Channel events ---------------- */
@@ -461,6 +485,8 @@ function RoomPage() {
       // finished game left behind has to clear, or the next one inherits it.
       clearTimeout(capTimer.current);
       clearTimeout(advanceTimer.current);
+      clearTimeout(revealTimer.current);
+      closedFor.current = -1;
       setRound(null);
       setMyResult(null);
       setForceEnd(false);
@@ -586,6 +612,7 @@ function RoomPage() {
     () => () => {
       clearTimeout(capTimer.current);
       clearTimeout(advanceTimer.current);
+      clearTimeout(revealTimer.current);
       clearTimeout(addDebounce.current);
     },
     []

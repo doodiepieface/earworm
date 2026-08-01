@@ -35,6 +35,7 @@ export function createHost({ mode = "shared", random = Math.random } = {}) {
     results: new Map(), // playerId -> report, cleared each round
     totals: new Map(), // playerId -> { score, timeMs }
     redrawnFor: -1,
+    closedIndex: -1, // last round already scored; guards double-counting
   };
 
   let nameLookup = {};
@@ -128,6 +129,7 @@ export function createHost({ mode = "shared", random = Math.random } = {}) {
     s.results = new Map();
     s.totals = new Map();
     s.redrawnFor = -1;
+    s.closedIndex = -1;
     buildList();
     return directiveFor(0);
   }
@@ -152,7 +154,13 @@ export function createHost({ mode = "shared", random = Math.random } = {}) {
     return ids.every((id) => s.results.has(id));
   }
 
+  // Returns null if this round has already been scored. Two callers can race to
+  // close a round — everyone answering, and the time cap expiring — and scoring
+  // twice would double every total. The room page guards this as well; this is
+  // the layer that makes it impossible rather than merely unlikely.
   function close(roster) {
+    if (s.closedIndex === s.index) return null;
+    s.closedIndex = s.index;
     const people = roster || [];
     if (people.length) nameLookup = Object.fromEntries(people.map((p) => [p.id, p.name]));
     const entry = s.list[s.index] || {};
