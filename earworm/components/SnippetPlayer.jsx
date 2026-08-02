@@ -12,6 +12,28 @@ import EqIcon from "./EqIcon";
 // and the hand tracks the playhead like a tonearm. Ladder marks sit around
 // the rim at each stage, so you can see the next one coming.
 
+// --- The cushion, for the very short stages ---
+//
+// play() and pause() are the slow operations on mobile: the browser ramps audio
+// in over tens of milliseconds and takes its time silencing a decoder that has
+// already buffered ahead. At the 0.1s stage that ramp IS the whole snippet, so
+// you hear a blip instead of music.
+//
+// So for short stages the transport no longer defines the snippet. Playback
+// starts MUTED a little before the target, runs at full tilt through the
+// audible window, and keeps running muted afterwards — only the mute flag flips
+// at the boundaries, and that is instantaneous. pause() still happens, but by
+// then nothing is audible, so its latency stops mattering.
+//
+// It has to be `muted`, not `volume`: iOS Safari makes HTMLMediaElement.volume
+// read-only, so a volume ramp would work on Android and desktop and silently do
+// nothing on an iPhone — the exact device this is for.
+const LEAD_IN_SECONDS = 0.25; // muted run-up before the audible window
+const TAIL_MS = 250; // muted run-on after it, so pause() is never the stopper
+// Only the stages where start/stop latency is comparable to the snippet itself.
+// Longer stages keep the original, proven path untouched.
+const CUSHION_MAX_SECONDS = 2;
+
 export default function SnippetPlayer({
   song,
   unlockedSeconds,
@@ -47,8 +69,11 @@ export default function SnippetPlayer({
     if (a) {
       a.pause();
       a.currentTime = 0;
+      a.muted = false; // never carry a mute across songs — that would be silence
     }
+    clearTail();
     startPosRef.current = null;
+    audibleStartRef.current = null;
     setElapsed(0);
     setPlaying(false);
     setAudioError(false);
@@ -67,6 +92,23 @@ export default function SnippetPlayer({
   // point means every stage plays its full length. Null until playback starts.
   const startPosRef = useRef(null);
 
+  // Short stages only. Everything above CUSHION_MAX_SECONDS keeps the original
+  // path, so the 30s reveal and the long stages are untouched by any of this.
+  const cushioned = unlockedSeconds <= CUSHION_MAX_SECONDS;
+
+  // The media position where the AUDIBLE window opened — i.e. where we unmuted.
+  // Distinct from startPosRef, which is where the muted run-up began. The
+  // snippet, the readout and the dial are all measured from here.
+  const audibleStartRef = useRef(null);
+  const tailTimer = useRef(null);
+
+  function clearTail() {
+    clearTimeout(tailTimer.current);
+    tailTimer.current = null;
+  }
+
+  useEffect(() => clearTail, []);
+
   // Stop playback at the unlock point. The rAF loop below does this smoothly
   // while the tab is visible, but browsers pause requestAnimationFrame in a
   // backgrounded tab — so on its own it lets the whole preview play out while
@@ -74,8 +116,12 @@ export default function SnippetPlayer({
   // for playing media even when hidden, so it's the reliable backstop.
   function enforceCap() {
     const a = audioRef.current;
-    const start = startPosRef.current;
+    // Measure from wherever the audible window actually opened. When cushioned
+    // that's the unmute point; otherwise it's where playback began.
+    const start = cushioned ? audibleStartRef.current : startPosRef.current;
     if (a && start != null && a.currentTime - start >= unlockedSeconds) {
+      if (cushioned) a.muted = true; // silence first — pausing can lag
+      clearTail();
       a.pause();
       setElapsed(unlockedSeconds);
     }
@@ -99,6 +145,42 @@ export default function SnippetPlayer({
         raf = requestAnimationFrame(tick);
         return;
       }
+
+      if (cushioned) {
+        const now = a.currentTime;
+
+        // Still in the muted run-up: nothing is audible yet, so the readout
+        // stays at zero and the snippet clock hasn't started.
+        if (audibleStartRef.current == null) {
+          if (now < startAt) {
+            raf = requestAnimationFrame(tick);
+            return;
+          }
+          a.muted = false;
+          // Anchor to where sound actually opened, not to the nominal startAt —
+          // the same reason the non-cushioned path anchors on `playing`.
+          audibleStartRef.current = now;
+        }
+
+        const heard = now - audibleStartRef.current;
+        if (heard >= unlockedSeconds) {
+          a.muted = true; // instant; this is what ends the snippet
+          setElapsed(unlockedSeconds);
+          // Let the element run on muted for a moment before pausing. pause()
+          // is the slow call, and nothing is audible now, so its lag is free.
+          if (!tailTimer.current) {
+            tailTimer.current = setTimeout(() => {
+              tailTimer.current = null;
+              audioRef.current?.pause();
+            }, TAIL_MS);
+          }
+          return; // stop scheduling
+        }
+        setElapsed(heard);
+        raf = requestAnimationFrame(tick);
+        return;
+      }
+
       const played = a.currentTime - start; // seconds heard this play
       if (played >= unlockedSeconds) {
         a.pause();
@@ -110,17 +192,30 @@ export default function SnippetPlayer({
     };
     raf = requestAnimationFrame(tick);
     return () => cancelAnimationFrame(raf);
-  }, [playing, unlockedSeconds]);
+    // `startAt` is read inside the loop now (it's where the cushion unmutes),
+    // so it belongs here or the closure could hold a stale offset.
+  }, [playing, unlockedSeconds, startAt, cushioned]);
 
   function togglePlay() {
     const a = audioRef.current;
     if (!a || audioError) return;
     if (playing) {
+      clearTail();
+      a.muted = false;
       a.pause();
       return;
     }
+    clearTail();
     startPosRef.current = null; // re-anchor when playback actually starts
-    a.currentTime = startAt; // begin at this round's random offset
+    audibleStartRef.current = null;
+
+    // Back up before the target so the device is at full speed by the time the
+    // audible window opens. Clamped at the start of the preview — if there's no
+    // room for a run-up, the tail cushion still does its half of the job.
+    const lead = cushioned ? Math.min(LEAD_IN_SECONDS, startAt) : 0;
+    a.currentTime = Math.max(0, startAt - lead);
+    // Set explicitly every time, so a mute can never leak into a later stage.
+    a.muted = cushioned;
     a.volume = volume;
     a.play().catch(() => setAudioError(true));
   }

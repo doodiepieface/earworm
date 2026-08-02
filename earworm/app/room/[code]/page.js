@@ -4,21 +4,25 @@ import { Suspense, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { useParams, useRouter, useSearchParams } from "next/navigation";
 import RoundBoard from "@/components/RoundBoard";
+import RoundOutcome from "@/components/RoundOutcome";
 import Scoreboard from "@/components/Scoreboard";
-import { getPack } from "@/data/packs";
+import packs, { getPack } from "@/data/packs";
 import { joinRoom, isRoomsEnabled } from "@/lib/room";
+import { createHost } from "@/lib/roomHost";
 import {
   MIN_PLAYERS,
   MAX_PLAYERS,
   MAX_CONTRIBUTIONS_PER_PLAYER,
   DEFAULT_ROUNDS,
   ROUND_CAP_MS,
-  buildRoundList,
+  MIN_SUPERFAN_POOL,
+  SUPERFAN_SAMPLE_SIZE,
+  DEPTH_CAPS,
   dedupeContributions,
-  scoreForResult,
-  sortStandings,
+  shuffled,
 } from "@/lib/roomGame";
-import { pickStartOffset } from "@/lib/gameState";
+import { pickSong, pickStartOffset } from "@/lib/gameState";
+import SuperfanLobby from "@/components/SuperfanLobby";
 import { resolveTracks, streamArtistPool, searchGuesses } from "@/lib/itunes";
 import {
   getPlayerId,
@@ -33,6 +37,25 @@ import { getClient } from "@/lib/supabase";
 
 const MIN_POOL_SIZE = 4;
 const SCORE_AUTO_ADVANCE_MS = 8000;
+// Breathing room between the last answer and the scoreboard. Without it the
+// person who finishes last sees the song they just guessed for a few
+// milliseconds before being yanked to the standings.
+const REVEAL_MS = 2000;
+
+// The guess list is keyed on song id, so a repeated id makes React warn and can
+// drop rows. A crossover song can already be in your own pool (it's your artist
+// being played), and a deep catalog walk can surface the same track from two
+// albums — so both pools get deduped rather than trusting the source.
+function dedupeById(songs) {
+  const seen = new Set();
+  const out = [];
+  for (const s of songs || []) {
+    if (!s || seen.has(s.id)) continue;
+    seen.add(s.id);
+    out.push(s);
+  }
+  return out;
+}
 
 // The lobby and the game live in one component because they share the channel
 // connection and the host's authoritative state. The host's browser IS the
@@ -47,6 +70,7 @@ function RoomPage() {
   const isHost = search.get("host") === "1";
   const packId = search.get("pack");
   const artistName = search.get("artist");
+  const mode = search.get("mode") === "superfan" ? "superfan" : "shared";
 
   // connecting | naming | lobby | playing | scores | ended | closed
   const [phase, setPhase] = useState("connecting");
@@ -74,23 +98,51 @@ function RoomPage() {
   const [lastScores, setLastScores] = useState(null);
   const [totals, setTotals] = useState([]);
 
+  // The chosen pool starts from the host's URL but lives in state, so "new pool,
+  // same room" can change it without a re-navigation. Re-navigating would drop
+  // the host from presence for a moment, and every guest's host-left check would
+  // fire and close the room out from under them.
+  const [poolChoice, setPoolChoice] = useState(() =>
+    packId ? { type: "pack", id: packId } : artistName ? { type: "artist", name: artistName } : null
+  );
+  const [newArtist, setNewArtist] = useState("");
+  const poolChoiceRef = useRef(null);
+
+  // Superfan lobby. `resolving` is this player pulling their OWN artist, which
+  // is distinct from `preparing` (the host pulling the shared pool) — different
+  // modes, different actors, so they stay separate flags.
+  const [claims, setClaims] = useState([]);
+  const [depth, setDepth] = useState("standard");
+  const [resolving, setResolving] = useState(false);
+  const [resolveNote, setResolveNote] = useState("");
+
   const meId = useRef(null);
   const conn = useRef(null);
   const addDebounce = useRef(null);
   const capTimer = useRef(null);
   const advanceTimer = useRef(null);
+  const revealTimer = useRef(null);
   const roundStartedAt = useRef(0);
+  // Highest round index already scored, so a round can't be closed twice.
+  const closedFor = useRef(-1);
 
-  // Host-only authoritative state. Never rendered — showing the pool would put
-  // every answer on screen.
-  const poolSongs = useRef([]);
-  const contributions = useRef([]);
-  const roundList = useRef([]);
-  const roundIndex = useRef(-1);
-  const roundResults = useRef(new Map());
-  const totalsRef = useRef(new Map());
-  const redrawnFor = useRef(-1);
+  // Host-only authoritative state, all of it inside the engine. Never rendered —
+  // showing the pool would put every answer on screen. The engine is React-free
+  // and lives in lib/roomHost.js; this page only relays what it emits.
+  const host = useRef(null);
+  if (isHost && !host.current) host.current = createHost({ mode });
   const knownIds = useRef(new Set());
+
+  // Superfan: this player's own artist pool. It is NEVER broadcast — mastery
+  // rounds carry no song, so each client picks locally from here. Only a small
+  // sample goes over the wire, for the crossover finale.
+  const myPool = useRef([]);
+  const myPlayed = useRef(new Set()); // shuffle-bag state across mastery rounds
+  const myLastId = useRef(null);
+  // Songs the guess box can offer during crossover rounds: this player's own
+  // catalog plus every crossover song seen so far.
+  const crossoverPool = useRef([]);
+  const claimsRef = useRef([]);
 
   // Mirrors of state that memo-free handlers need to read without going stale.
   const poolNameRef = useRef("");
@@ -99,12 +151,35 @@ function RoomPage() {
   const phaseRef = useRef("connecting");
   const roundRef = useRef(null);
 
+  // The room's mode and depth are the HOST's — a joiner's URL is a bare
+  // /room/CODE with no query params at all, so reading them from `search` would
+  // silently give every guest the shared-pool lobby. They come off the host's
+  // presence entry instead. Undefined until presence settles, which is why the
+  // lobby renders neither mode's sections until it resolves.
+  const hostEntry = roster.find((p) => p.isHost);
+  const roomMode = isHost ? mode : hostEntry?.mode || undefined;
+  const roomDepth = isHost ? depth : hostEntry?.depth || "standard";
+
+  const roomModeRef = useRef(undefined);
+  const roomDepthRef = useRef("standard");
+
   useEffect(() => {
     poolNameRef.current = poolName;
     rosterRef.current = roster;
     phaseRef.current = phase;
     roundRef.current = round;
+    claimsRef.current = claims;
+    roomModeRef.current = roomMode;
+    roomDepthRef.current = roomDepth;
+    poolChoiceRef.current = poolChoice;
   });
+
+  // Host only: re-publish presence when the depth selector changes, so every
+  // client resolves its artist against the same cap.
+  useEffect(() => {
+    if (!isHost || !conn.current) return;
+    conn.current.track({ mode, depth });
+  }, [isHost, mode, depth, phase]);
 
   /* ---------------- Identity ---------------- */
 
@@ -122,113 +197,116 @@ function RoomPage() {
 
   /* ---------------- Host: build the round list and drive rounds ---------------- */
 
-  function standingsFromRef() {
-    return sortStandings(
-      rosterRef.current.map((p) => {
-        const t = totalsRef.current.get(p.id) || { score: 0, timeMs: 0 };
-        return { id: p.id, name: p.name, score: t.score, timeMs: t.timeMs };
-      })
-    );
-  }
-
-  function broadcastRound(index, song) {
-    conn.current?.send("round", {
-      index,
-      song,
-      startAt: pickStartOffset(),
-      capMs: ROUND_CAP_MS,
-    });
+  // The engine decides what happens; the page just puts it on the wire.
+  function emit(directive) {
+    if (!directive) return;
+    conn.current?.send(directive.event, directive.payload);
   }
 
   function nextRound() {
     clearTimeout(advanceTimer.current);
-    const i = roundIndex.current + 1;
-    if (i >= roundList.current.length) {
-      conn.current?.send("end", {
-        totals: standingsFromRef(),
-        poolName: poolNameRef.current,
-        rounds: roundList.current.length,
-      });
-      return;
-    }
-    roundIndex.current = i;
-    roundResults.current = new Map();
-    redrawnFor.current = -1;
-    broadcastRound(i, roundList.current[i].song);
+    emit(host.current?.next());
+  }
+
+  // Superfan: every player resolves their OWN artist in their OWN browser. That
+  // spread is what makes the mode viable — one host resolving five catalogs
+  // through the shared iTunes proxy would crawl.
+  async function claimArtist(artist) {
+    // The host's depth, not this client's local default — an unequal cap would
+    // quietly break the fairness the setting exists to provide.
+    const cap = DEPTH_CAPS[roomDepthRef.current] ?? DEPTH_CAPS.standard;
+    setResolveNote(`Pulling ${artist}…`);
+    setResolving(true);
+    myPool.current = [];
+    myPlayed.current = new Set();
+    myLastId.current = null;
+
+    const collected = [];
+    await streamArtistPool(artist, {
+      // Doubles as the depth cap: streamArtistPool checks this between album
+      // lookups, so a Hits game stops after roughly the first search instead of
+      // walking the whole discography.
+      isAborted: () => collected.length >= cap,
+      onSong: (song) => {
+        if (collected.length < cap) collected.push(song);
+        if (collected.length % 10 === 0) {
+          setResolveNote(`Pulling ${artist}… ${collected.length} songs`);
+        }
+      },
+    });
+
+    const playable = dedupeById(collected.filter((s) => s.previewUrl)).slice(0, cap);
+    myPool.current = playable;
+    setResolving(false);
+    setResolveNote("");
+    conn.current?.send("claim", {
+      playerId: meId.current,
+      name,
+      artist,
+      songCount: playable.length,
+      ready: playable.length >= MIN_SUPERFAN_POOL,
+    });
+  }
+
+  function startSuperfanGame() {
+    closedFor.current = -1;
+    const h = host.current;
+    const claimMap = Object.fromEntries(claimsRef.current.map((c) => [c.playerId, c.artist]));
+    const names = Object.fromEntries(rosterRef.current.map((p) => [p.id, p.name]));
+    knownIds.current = new Set(rosterRef.current.map((p) => p.id));
+
+    conn.current?.send("start", { rounds, poolName: "Superfan", poolSpec: null });
+    // Samples arrive as their own broadcasts in response to `start`; give them a
+    // moment to land before the crossover list is built out of them.
+    setTimeout(() => emit(h.start({ rounds, claims: claimMap, names })), 1500);
   }
 
   function startGame() {
-    const list = buildRoundList({
-      poolSongs: poolSongs.current,
-      contributions: contributions.current,
-      rounds,
-    });
-    if (list.length < 1) return;
-    roundList.current = list;
-    roundIndex.current = -1;
-    roundResults.current = new Map();
-    totalsRef.current = new Map();
+    closedFor.current = -1;
+    if (mode === "superfan") return startSuperfanGame();
+    const h = host.current;
+    if (!h || h.poolSize() < MIN_POOL_SIZE) return;
     knownIds.current = new Set(rosterRef.current.map((p) => p.id));
 
     conn.current?.send("pool", {
-      count: poolSongs.current.length + contributions.current.length,
+      count: h.poolSize(),
       poolName: poolNameRef.current,
       locked: true,
     });
     conn.current?.send("start", {
-      rounds: list.length,
+      rounds,
       poolName: poolNameRef.current,
-      poolSpec: packId
-        ? { type: "pack", id: packId }
-        : { type: "artist", name: artistName },
+      poolSpec: poolChoiceRef.current,
     });
-    nextRound();
+
+    const names = Object.fromEntries(rosterRef.current.map((p) => [p.id, p.name]));
+    emit(h.start({ rounds, names }));
   }
 
+  // Idempotent per round. Two paths can close a round — everyone answering, and
+  // the 60s cap expiring — and with the reveal delay below they can now overlap.
+  // Closing twice would run the engine's scoring twice and double every total.
   function closeRound() {
+    const h = host.current;
+    if (!h) return;
+    const idx = h.roundIndex();
+    if (idx < 0 || closedFor.current === idx) return;
+    closedFor.current = idx;
     clearTimeout(capTimer.current);
-    const entry = roundList.current[roundIndex.current];
-    const contributedById = entry?.contributedBy || null;
-
-    const results = rosterRef.current.map((p) => {
-      const r = roundResults.current.get(p.id);
-      const selfPick = contributedById === p.id;
-      const won = !!r?.won;
-      const guessCount = r?.guessCount ?? 6;
-      const points = scoreForResult({ won, guessCount, isSelfPick: selfPick });
-      const prev = totalsRef.current.get(p.id) || { score: 0, timeMs: 0 };
-      totalsRef.current.set(p.id, {
-        score: prev.score + points,
-        timeMs: prev.timeMs + (r?.ms ?? ROUND_CAP_MS),
-      });
-      return {
-        playerId: p.id,
-        name: p.name,
-        won,
-        guessCount,
-        points,
-        selfPick,
-        missing: !r,
-      };
-    });
-
-    const byName = contributedById
-      ? rosterRef.current.find((p) => p.id === contributedById)?.name || null
-      : null;
-
-    conn.current?.send("scores", {
-      index: roundIndex.current,
-      contributedBy: byName,
-      results,
-      totals: standingsFromRef(),
-    });
+    clearTimeout(revealTimer.current);
+    emit(h.close(rosterRef.current));
   }
 
+  // Everyone has answered — but whoever finished last has only just seen the
+  // answer. Hold the scoreboard back briefly so they get to read it, instead of
+  // being thrown straight into the standings.
   function maybeCloseRound() {
-    if (roundIndex.current < 0) return;
-    const present = rosterRef.current.map((p) => p.id);
-    if (!present.length) return;
-    if (present.every((id) => roundResults.current.has(id))) closeRound();
+    const h = host.current;
+    if (!h || h.roundIndex() < 0) return;
+    if (closedFor.current === h.roundIndex()) return;
+    if (!h.hasAllReports(rosterRef.current.map((p) => p.id))) return;
+    clearTimeout(revealTimer.current);
+    revealTimer.current = setTimeout(closeRound, REVEAL_MS);
   }
 
   /* ---------------- Channel events ---------------- */
@@ -247,17 +325,65 @@ function RoomPage() {
     if (event === "add" && isHost) {
       // The host is the authority on the pool, so the per-player cap is enforced
       // here too — not only in the sender's UI.
-      const already = contributions.current.filter((c) => c.by === payload.playerId).length;
-      if (already >= MAX_CONTRIBUTIONS_PER_PLAYER) return;
-      contributions.current = dedupeContributions(
-        [...contributions.current, { song: payload.song, by: payload.playerId, byName: payload.name }],
-        poolSongs.current
-      );
-      publishPool(poolSongs.current, poolNameRef.current);
+      const h = host.current;
+      if (h.contributionCount(payload.playerId) >= MAX_CONTRIBUTIONS_PER_PLAYER) return;
+      h.addContribution({ song: payload.song, by: payload.playerId, byName: payload.name });
+      h.setContributions(dedupeContributions(h.contributions(), h.pool()));
+      publishPool();
+      return;
+    }
+
+    if (event === "claim") {
+      setClaims((prev) => {
+        const rest = prev.filter((c) => c.playerId !== payload.playerId);
+        return [...rest, payload].sort((a, b) => a.name.localeCompare(b.name));
+      });
+      return;
+    }
+
+    if (event === "sample" && isHost) {
+      host.current?.setSample(payload.playerId, payload.songs);
+      return;
+    }
+
+    if (event === "mastery") {
+      // No song came over the wire on purpose — pick our own, from our own pool.
+      const song = pickSong(myPool.current, myPlayed.current, myLastId.current);
+      myLastId.current = song?.id ?? null;
+      setRound({
+        key: `m-${payload.index}-${song?.id}-${Date.now()}`,
+        index: payload.index,
+        song,
+        startAt: pickStartOffset(),
+        capMs: payload.capMs,
+        kind: "mastery",
+        ownerName: null,
+        artist: null,
+      });
+      setForceEnd(false);
+      setMyResult(null);
+      setLastScores(null);
+      setPhase("playing");
+      roundStartedAt.current = Date.now();
+      clearTimeout(capTimer.current);
+      capTimer.current = setTimeout(() => {
+        setForceEnd(true);
+        if (isHost) closeRound();
+      }, payload.capMs);
       return;
     }
 
     if (event === "start") {
+      // Superfan: hand the host this player's slice of the crossover finale.
+      // Sent on `start` rather than on claim, so re-picking an artist can't
+      // leave a stale sample behind.
+      if (roomModeRef.current === "superfan" && myPool.current.length) {
+        conn.current?.send("sample", {
+          playerId: meId.current,
+          songs: shuffled(myPool.current).slice(0, SUPERFAN_SAMPLE_SIZE),
+        });
+        crossoverPool.current = dedupeById([...myPool.current]);
+      }
       setLocked(true);
       setTotals([]);
       setTotalRounds(payload.rounds);
@@ -270,7 +396,16 @@ function RoomPage() {
     }
 
     if (event === "round") {
-      setRound({ key: `${payload.index}-${payload.song.id}-${Date.now()}`, ...payload });
+      // Crossover rounds need something local for the guess box to filter, so
+      // fold each one into the pool as it arrives.
+      if (roomModeRef.current === "superfan") {
+        crossoverPool.current = dedupeById([...crossoverPool.current, payload.song]);
+      }
+      setRound({
+        key: `${payload.index}-${payload.song.id}-${Date.now()}`,
+        kind: "round",
+        ...payload,
+      });
       setForceEnd(false);
       setMyResult(null);
       setLastScores(null);
@@ -287,28 +422,16 @@ function RoomPage() {
     }
 
     if (event === "done" && isHost) {
-      if (payload.roundIndex !== roundIndex.current) return; // stale round
-      if (roundResults.current.has(payload.playerId)) return; // first report wins
-      roundResults.current.set(payload.playerId, payload);
+      // Stale-round and duplicate-report guards live in the engine.
+      host.current?.record(payload);
       maybeCloseRound();
       return;
     }
 
     if (event === "unplayable" && isHost) {
-      // Preview URLs are identical for everyone, so one dead report means the
-      // round is dead for all. Redraw once — a second failure would loop.
-      if (payload.roundIndex !== roundIndex.current) return;
-      if (redrawnFor.current === roundIndex.current) return;
-      redrawnFor.current = roundIndex.current;
-      poolSongs.current = poolSongs.current.filter((s) => s.id !== payload.songId);
-      const replacement = poolSongs.current.find(
-        (s) => !roundList.current.some((r) => r.song.id === s.id)
-      );
-      if (!replacement) return;
-      roundList.current[roundIndex.current] = { song: replacement, contributedBy: null };
-      roundResults.current = new Map();
+      if (payload.roundIndex !== host.current?.roundIndex()) return;
       clearTimeout(capTimer.current);
-      broadcastRound(roundIndex.current, replacement);
+      emit(host.current?.replaceDeadSong(payload.songId));
       return;
     }
 
@@ -356,6 +479,47 @@ function RoomPage() {
       recordRoomHistory(payload);
       return;
     }
+
+    if (event === "reset") {
+      // Same room, same code, same people — only the pool goes. Everything the
+      // finished game left behind has to clear, or the next one inherits it.
+      clearTimeout(capTimer.current);
+      clearTimeout(advanceTimer.current);
+      clearTimeout(revealTimer.current);
+      closedFor.current = -1;
+      setRound(null);
+      setMyResult(null);
+      setForceEnd(false);
+      setLastScores(null);
+      setTotals([]);
+      setTotalRounds(0);
+      setLocked(false);
+      setMyAdds([]);
+      setAddQuery("");
+      setAddResults([]);
+      setPoolCount(0);
+      setPoolName("");
+      setNotice("");
+      setPhase("lobby");
+
+      if (roomModeRef.current === "superfan") {
+        // Everyone re-claims, so drop the old artist and its shuffle-bag state.
+        setClaims([]);
+        myPool.current = [];
+        myPlayed.current = new Set();
+        myLastId.current = null;
+        crossoverPool.current = [];
+      }
+
+      if (isHost) {
+        // A fresh engine: the old one still holds the finished round list and
+        // every player's running total.
+        host.current = createHost({ mode });
+        setPoolChoice(null);
+        setNewArtist("");
+      }
+      return;
+    }
   }
 
   function handleRoster(players) {
@@ -368,21 +532,28 @@ function RoomPage() {
     for (const p of players) {
       if (knownIds.current.has(p.id)) continue;
       knownIds.current.add(p.id);
-      if (roundIndex.current < 0) continue; // still in the lobby, nothing to sync
+
+      // Broadcasts have no replay, so every claim sent before this player
+      // arrived is gone as far as they're concerned. The host holds them all,
+      // so re-send them to catch the newcomer up. Handlers key on playerId, so
+      // everyone else just re-applies what they already had.
+      if (roomModeRef.current === "superfan") {
+        for (const c of claimsRef.current) conn.current?.send("claim", c);
+      }
+
+      if (host.current.roundIndex() < 0) continue; // still in the lobby, nothing to sync
       conn.current?.send("sync", {
         toPlayerId: p.id,
-        totalRounds: roundList.current.length,
+        totalRounds: host.current.totalRounds(),
         poolName: poolNameRef.current,
-        poolSpec: packId
-          ? { type: "pack", id: packId }
-          : { type: "artist", name: artistName },
-        index: roundIndex.current,
-        song: roundList.current[roundIndex.current]?.song,
+        poolSpec: poolChoiceRef.current,
+        index: host.current.roundIndex(),
+        song: host.current.currentEntry()?.song,
         // A rejoining player hears the clip from the start rather than an
         // offset they never heard the beginning of.
         startAt: 0,
         capMs: ROUND_CAP_MS,
-        totals: standingsFromRef(),
+        totals: host.current.standings(rosterRef.current),
       });
     }
 
@@ -395,8 +566,8 @@ function RoomPage() {
     if (phaseRef.current === "playing") maybeCloseRound();
 
     // A guest who joins after the pool was published would otherwise show 0.
-    if (phaseRef.current === "lobby" && poolSongs.current.length) {
-      publishPool(poolSongs.current, poolNameRef.current);
+    if (phaseRef.current === "lobby" && host.current.poolSize()) {
+      publishPool();
     }
   }
 
@@ -415,7 +586,15 @@ function RoomPage() {
     if (!name || !meId.current || phase === "closed") return;
 
     const c = joinRoom(code, {
-      self: { id: meId.current, name, isHost },
+      // Only the host's URL carries ?mode= and the depth selector, so both ride
+      // in presence for everyone else to read off the host's entry.
+      self: {
+        id: meId.current,
+        name,
+        isHost,
+        mode: isHost ? mode : null,
+        depth: isHost ? depth : null,
+      },
       onEvent: (e, p) => eventHandler.current(e, p),
       onRoster: (r) => rosterHandler.current(r),
     });
@@ -433,6 +612,7 @@ function RoomPage() {
     () => () => {
       clearTimeout(capTimer.current);
       clearTimeout(advanceTimer.current);
+      clearTimeout(revealTimer.current);
       clearTimeout(addDebounce.current);
     },
     []
@@ -441,21 +621,26 @@ function RoomPage() {
   /* ---------------- Host: resolve the pool ---------------- */
 
   function publishPool(songs, label) {
-    const playable = (songs || []).filter((s) => s.previewUrl);
-    poolSongs.current = playable;
-    poolNameRef.current = label;
-    const total = playable.length + contributions.current.length;
-    setPoolCount(total);
-    setPoolName(label);
-    conn.current?.send("pool", { count: total, poolName: label, locked: false });
+    const h = host.current;
+    if (!h) return;
+    if (songs) h.setPool(songs);
+    const name = label ?? poolNameRef.current;
+    poolNameRef.current = name;
+    setPoolCount(h.poolSize());
+    setPoolName(name);
+    conn.current?.send("pool", { count: h.poolSize(), poolName: name, locked: false });
   }
 
   useEffect(() => {
     if (!isHost || phase !== "lobby") return;
+    // Superfan has no shared pool — every player resolves their own artist.
+    if (mode === "superfan") return;
+    // No pool chosen yet: the host is at the picker after "new pool, same room".
+    if (!poolChoice) return;
     let aborted = false;
 
     async function preparePack() {
-      const pack = getPack(packId);
+      const pack = getPack(poolChoice.id);
       if (!pack) {
         setNotice("That pack no longer exists.");
         return;
@@ -479,28 +664,27 @@ function RoomPage() {
     async function prepareArtist() {
       setPreparing(true);
       const collected = [];
-      await streamArtistPool(artistName, {
+      await streamArtistPool(poolChoice.name, {
         isAborted: () => aborted,
         onSong: (song) => {
           collected.push(song);
           // Republish periodically so the lobby count visibly climbs.
-          if (collected.length % 10 === 0) publishPool(collected, artistName);
+          if (collected.length % 10 === 0) publishPool(collected, poolChoice.name);
         },
       });
       if (aborted) return;
-      publishPool(collected, artistName);
+      publishPool(collected, poolChoice.name);
       setPreparing(false);
     }
 
-    if (packId) preparePack();
-    else if (artistName) prepareArtist();
-    else setNotice("This room has no pool — the host link is missing a pack or artist.");
+    if (poolChoice.type === "pack") preparePack();
+    else if (poolChoice.type === "artist") prepareArtist();
 
     return () => {
       aborted = true;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isHost, phase, packId, artistName]);
+  }, [isHost, phase, mode, poolChoice]);
 
   /* ---------------- Contributions ---------------- */
 
@@ -672,8 +856,15 @@ function RoomPage() {
           <p className="eyebrow">
             Round <strong>{round.index + 1}</strong>
             {totalRounds ? <span className="dim"> of {totalRounds}</span> : null}
+            {round.kind === "mastery" && <span className="dim"> · your artist</span>}
             <span className="dim"> · room {code}</span>
           </p>
+          {round.ownerName && (
+            <p className="round-owner">
+              ♪ from <strong>{round.ownerName}</strong>&rsquo;s artist —{" "}
+              <span className="round-artist">{round.artist}</span>
+            </p>
+          )}
         </div>
 
         <RoundBoard
@@ -681,14 +872,24 @@ function RoomPage() {
           song={round.song}
           startAt={round.startAt}
           forceEnd={forceEnd}
+          capMs={round.capMs}
+          localSongs={
+            roomMode !== "superfan"
+              ? null
+              : round.kind === "mastery"
+              ? myPool.current
+              : crossoverPool.current
+          }
           onFinish={handleRoundFinish}
           onUnplayable={handleRoundUnplayable}
         >
           {myResult && (
-            <p className="room-waiting">
-              {myResult.won ? `Got it in ${myResult.guessCount}.` : "Missed that one."}{" "}
-              Waiting for everyone else…
-            </p>
+            <RoundOutcome
+              won={myResult.won}
+              guessCount={myResult.guessCount}
+              song={round.song}
+              note="Waiting for everyone else…"
+            />
           )}
         </RoundBoard>
       </div>
@@ -704,6 +905,8 @@ function RoomPage() {
         <Scoreboard
           results={lastScores.results}
           contributedBy={lastScores.contributedBy}
+          ownerName={lastScores.ownerName}
+          artist={lastScores.artist}
           totals={lastScores.totals}
           meId={meId.current}
         />
@@ -734,9 +937,18 @@ function RoomPage() {
         <Scoreboard totals={totals} meId={meId.current} final />
         <div className="room-actions">
           {isHost && (
-            <button type="button" className="btn btn-primary" onClick={startGame}>
-              Play again
-            </button>
+            <>
+              <button type="button" className="btn btn-primary" onClick={startGame}>
+                Play again
+              </button>
+              <button
+                type="button"
+                className="btn btn-ghost"
+                onClick={() => conn.current?.send("reset", {})}
+              >
+                {roomMode === "superfan" ? "New artists, same room" : "New pool, same room"}
+              </button>
+            </>
           )}
           <button type="button" className="btn btn-ghost" onClick={replayPoolSolo}>
             Replay this pool solo
@@ -751,8 +963,13 @@ function RoomPage() {
 
   /* ---------------- Lobby ---------------- */
 
+  const readyClaims = claims.filter((c) => c.ready);
   const canStart =
-    isHost && roster.length >= MIN_PLAYERS && poolCount >= MIN_POOL_SIZE && !preparing;
+    isHost &&
+    roster.length >= MIN_PLAYERS &&
+    (mode === "superfan"
+      ? readyClaims.length === roster.length
+      : poolCount >= MIN_POOL_SIZE && !preparing);
 
   return (
     <div className="page room">
@@ -780,16 +997,80 @@ function RoomPage() {
         </ul>
       </section>
 
-      <section className="section">
-        <p className="eyebrow">Pool</p>
-        <p>
-          <strong>{poolName || "…"}</strong>
-          <span className="dim"> · {poolCount} songs</span>
-          {preparing && <span className="dim"> · preparing…</span>}
-        </p>
-      </section>
+      {roomMode === "superfan" && (
+        <SuperfanLobby
+          claims={claims}
+          meId={meId.current}
+          myClaim={claims.find((c) => c.playerId === meId.current) || null}
+          onClaim={claimArtist}
+          depth={roomDepth}
+          onDepth={setDepth}
+          isHost={isHost}
+          resolving={resolving}
+          resolveNote={resolveNote}
+        />
+      )}
 
-      {!locked && (
+      {roomMode === "shared" && isHost && !poolChoice && (
+        <>
+          <section className="section">
+            <p className="eyebrow">Pick a pack</p>
+            <div className="grid">
+              {packs.map((p) => (
+                <button
+                  key={p.id}
+                  type="button"
+                  className="card pool-card"
+                  onClick={() => setPoolChoice({ type: "pack", id: p.id })}
+                >
+                  <span className="pool-name">{p.name}</span>
+                  <span className="pool-blurb">{p.blurb}</span>
+                  <span className="pool-count mono">{p.tracks.length} songs</span>
+                </button>
+              ))}
+            </div>
+          </section>
+
+          <section className="section">
+            <p className="eyebrow">Or an artist</p>
+            <form
+              className="artist-form"
+              onSubmit={(e) => {
+                e.preventDefault();
+                const a = newArtist.trim();
+                if (a) setPoolChoice({ type: "artist", name: a });
+              }}
+            >
+              <input
+                type="text"
+                value={newArtist}
+                placeholder="Any artist…"
+                autoComplete="off"
+                aria-label="Artist for the next round"
+                onChange={(e) => setNewArtist(e.target.value)}
+              />
+              <button type="submit" className="btn btn-ghost" disabled={!newArtist.trim()}>
+                Use artist
+              </button>
+            </form>
+          </section>
+        </>
+      )}
+
+      {roomMode === "shared" && (!isHost || poolChoice) && (
+        <section className="section">
+          <p className="eyebrow">Pool</p>
+          <p>
+            <strong>{poolName || "…"}</strong>
+            <span className="dim"> · {poolCount} songs</span>
+            {preparing && <span className="dim"> · preparing…</span>}
+          </p>
+        </section>
+      )}
+
+      {roomMode === undefined && <p className="dim">Finding the host…</p>}
+
+      {roomMode === "shared" && !locked && (
         <section className="section">
           <p className="eyebrow">
             Add songs{" "}
@@ -871,10 +1152,14 @@ function RoomPage() {
           </button>
           {!canStart && (
             <p className="dim">
-              {preparing
-                ? "Waiting for the pool to finish loading…"
-                : roster.length < MIN_PLAYERS
+              {roster.length < MIN_PLAYERS
                 ? `Need at least ${MIN_PLAYERS} players.`
+                : mode === "superfan"
+                ? `Waiting on ${roster.length - readyClaims.length} player${
+                    roster.length - readyClaims.length === 1 ? "" : "s"
+                  } to claim an artist…`
+                : preparing
+                ? "Waiting for the pool to finish loading…"
                 : "Not enough playable songs yet."}
             </p>
           )}

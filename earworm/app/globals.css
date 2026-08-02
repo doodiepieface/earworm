@@ -29,6 +29,10 @@
 
   --win: #5ee6a8;
   --wrong: #ff6b6b;
+  /* The warm end of --spectrum, named so the round timer can step through
+     accent → warn → wrong without introducing a colour the palette didn't
+     already contain. */
+  --warn: #ffb454;
 
   --radius: 16px;
   --radius-sm: 10px;
@@ -1091,13 +1095,21 @@ input[type="text"]:focus {
   margin-top: 22px;
 }
 
+/* A win should be unmistakable at a glance — the old treatment was a border
+   tint alone, which read almost identically to a loss. */
 .result-won {
-  border-color: rgba(94, 230, 168, 0.45);
-  box-shadow: 0 0 40px -14px rgba(94, 230, 168, 0.4);
+  border-color: rgba(94, 230, 168, 0.55);
+  background:
+    linear-gradient(rgba(94, 230, 168, 0.14), rgba(94, 230, 168, 0.05)),
+    var(--surface);
+  box-shadow: 0 0 52px -14px rgba(94, 230, 168, 0.5);
 }
 
 .result-lost {
-  border-color: rgba(255, 107, 107, 0.4);
+  border-color: rgba(255, 107, 107, 0.45);
+  background:
+    linear-gradient(rgba(255, 107, 107, 0.1), rgba(255, 107, 107, 0.03)),
+    var(--surface);
 }
 
 .result-verdict {
@@ -1638,4 +1650,200 @@ code {
     letter-spacing: 0.22em;
     text-indent: 0.22em;
   }
+}
+
+/* ---------------- Round timer (multiplayer only) ---------------- */
+
+.round-timer {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin: 18px 0 10px;
+}
+
+.rt-track {
+  flex: 1;
+  height: 6px;
+  border-radius: var(--pill);
+  background: var(--surface-2);
+  overflow: hidden;
+}
+
+.rt-fill {
+  height: 100%;
+  border-radius: var(--pill);
+  background: var(--accent);
+  /* Matches the 100ms tick, so the bar glides instead of stepping. `width` is
+     the only animatable property here because the track clips it. */
+  transition: width 100ms linear, background-color 400ms ease;
+}
+
+.rt-readout {
+  color: var(--muted);
+  font-size: 0.85rem;
+  min-width: 3.2ch;
+  text-align: right;
+  transition: color 400ms ease;
+}
+
+.round-timer.is-warn .rt-fill {
+  background: var(--warn);
+}
+
+.round-timer.is-warn .rt-readout {
+  color: var(--warn);
+}
+
+.round-timer.is-urgent .rt-fill {
+  background: var(--wrong);
+}
+
+.round-timer.is-urgent .rt-readout {
+  color: var(--wrong);
+  animation: rt-pulse 1s ease-in-out infinite;
+}
+
+@keyframes rt-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.45; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .rt-fill {
+    transition: none;
+  }
+  .round-timer.is-urgent .rt-readout {
+    animation: none;
+  }
+}
+
+/* ---- Superfan claims ---- */
+
+.claims {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: grid;
+  gap: 2px;
+}
+
+.claims li {
+  display: grid;
+  grid-template-columns: 1fr 1.2fr auto;
+  gap: 12px;
+  align-items: baseline;
+  padding: 8px 0;
+  border-bottom: 1px solid var(--line);
+}
+
+.claims li:last-child {
+  border-bottom: 0;
+}
+
+.claims li.me {
+  color: var(--ink);
+  font-weight: 600;
+}
+
+.claim-who {
+  color: var(--muted);
+}
+
+.claim-artist {
+  font-family: var(--font-display), serif;
+  font-size: 1.05rem;
+}
+
+.claim-state {
+  color: var(--muted);
+  font-size: 0.8rem;
+}
+
+@media (max-width: 520px) {
+  .claims li {
+    grid-template-columns: 1fr auto;
+  }
+  .claim-who {
+    grid-column: 1 / -1;
+    font-size: 0.8rem;
+  }
+}
+
+/* ---- Superfan rounds & steals ---- */
+
+.sb-steal {
+  color: var(--accent);
+  font-family: var(--font-mono), monospace;
+  font-size: 0.66rem;
+  letter-spacing: 0.14em;
+  margin-left: 6px;
+}
+
+.sb-owner {
+  color: var(--muted);
+}
+
+.round-owner {
+  margin: 6px 0 0;
+  color: var(--muted);
+}
+
+.round-artist {
+  color: var(--accent);
+  font-family: var(--font-display), serif;
+  font-size: 1.05rem;
+}
+
+/* ---- Round outcome (multiplayer, between guessing and the scoreboard) ---- */
+
+.round-outcome {
+  margin-top: 22px;
+  display: grid;
+  gap: 14px;
+}
+
+.outcome-won {
+  border-color: rgba(94, 230, 168, 0.55);
+  background:
+    linear-gradient(rgba(94, 230, 168, 0.14), rgba(94, 230, 168, 0.05)),
+    var(--surface);
+  box-shadow: 0 0 52px -14px rgba(94, 230, 168, 0.5);
+}
+
+.outcome-lost {
+  border-color: rgba(255, 107, 107, 0.45);
+  background:
+    linear-gradient(rgba(255, 107, 107, 0.1), rgba(255, 107, 107, 0.03)),
+    var(--surface);
+}
+
+.outcome-verdict {
+  margin: 0;
+  font-family: var(--font-display), serif;
+  font-weight: 500;
+  font-size: 1.5rem;
+  line-height: 1.1;
+  letter-spacing: -0.015em;
+}
+
+.outcome-won .outcome-verdict {
+  color: var(--win);
+}
+
+.outcome-lost .outcome-verdict {
+  color: var(--wrong);
+}
+
+.outcome-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  flex-wrap: wrap;
+}
+
+.outcome-note {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.9rem;
 }

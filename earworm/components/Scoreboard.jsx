@@ -5,12 +5,26 @@
 //
 // `contributedBy` only ever arrives with the round's scores — after the round
 // has closed — so revealing whose pick it was is a payoff, never a hint.
-export default function Scoreboard({ results, contributedBy, totals, meId, final }) {
+export default function Scoreboard({
+  results,
+  contributedBy,
+  ownerName,
+  artist,
+  totals,
+  meId,
+  final,
+}) {
   return (
     <div className="card scoreboard">
       {contributedBy && (
         <p className="sb-pick">
           <strong>{contributedBy}</strong>&rsquo;s pick
+        </p>
+      )}
+
+      {ownerName && (
+        <p className="sb-pick">
+          <strong>{ownerName}</strong>&rsquo;s artist — {artist}
         </p>
       )}
 
@@ -27,6 +41,8 @@ export default function Scoreboard({ results, contributedBy, totals, meId, final
                   : r.won
                   ? `${r.guessCount} ${r.guessCount === 1 ? "guess" : "guesses"}`
                   : "missed"}
+                {r.isOwner && <span className="sb-owner"> · their artist</span>}
+                {r.stole && <span className="sb-steal"> STEAL</span>}
               </span>
               <span className="sb-points mono">{r.points > 0 ? `+${r.points}` : "—"}</span>
             </li>

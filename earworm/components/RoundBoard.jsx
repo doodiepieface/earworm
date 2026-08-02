@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import SnippetPlayer from "@/components/SnippetPlayer";
 import GuessLadder from "@/components/GuessLadder";
 import GuessInput from "@/components/GuessInput";
+import RoundTimer from "@/components/RoundTimer";
 import { isCorrectGuess } from "@/lib/itunes";
 import { LADDER, MAX_GUESSES, FULL_PREVIEW_SECONDS, skipLabel } from "@/lib/gameState";
 
@@ -25,6 +26,7 @@ export default function RoundBoard({
   startAt = 0,
   localSongs = null,
   forceEnd = false,
+  capMs = 0,
   onFinish,
   onUnplayable,
   children,
@@ -84,6 +86,11 @@ export default function RoundBoard({
       />
 
       <GuessLadder guesses={guesses} status={status} />
+
+      {/* Only multiplayer passes a cap, so solo play never shows a countdown.
+          It disappears the moment the round settles — once you've locked in an
+          answer you're waiting on other people, not racing a clock. */}
+      {!ended && capMs > 0 && <RoundTimer capMs={capMs} />}
 
       {!ended && (
         <GuessInput

@@ -154,3 +154,75 @@ export function mergeRoomHistory(local, remote) {
   out.sort((a, b) => b.endedAt - a.endedAt);
   return out.slice(0, MAX_ROOM_HISTORY);
 }
+
+/* ---------------- Superfan mode ---------------- */
+
+// The longest game a host can pick is 20 rounds, which splits to 13 mastery
+// rounds. A pool smaller than that would exhaust the shuffle bag and start
+// repeating songs inside one game, so the floor sits just above it.
+export const MIN_SUPERFAN_POOL = 15;
+
+// How many songs each player contributes to the crossover finale.
+export const SUPERFAN_SAMPLE_SIZE = 6;
+
+// One room-wide depth, applied to every player equally — that equality is what
+// keeps a 30-song artist comparable to a 400-song one.
+export const DEPTH_CAPS = { hits: 25, standard: 60, deep: Infinity };
+
+// Roughly two thirds mastery, one third crossover. The finale needs at least two
+// rounds to feel like a finale, and mastery needs at least one to mean anything.
+//
+// `playerCount` (the number of distinct claimed artists) stretches the finale so
+// every superfan gets at least one round defending their own artist — a plain
+// one-third split gives a 5-round game only 2 crossover rounds, which silently
+// leaves the third player's artist unplayed. Mastery always keeps one round, so
+// a room with more players than rounds still can't feature everyone; the lobby
+// warns about that rather than this function pretending otherwise.
+export function splitPhases(rounds, playerCount = 0) {
+  const total = Math.max(3, rounds || 0);
+  let finale = Math.max(2, Math.round(total / 3), playerCount || 0);
+  finale = Math.min(finale, total - 1);
+  let mastery = total - finale;
+  if (mastery < 1) {
+    mastery = 1;
+    finale = total - 1;
+  }
+  return { mastery, finale };
+}
+
+// Round-robin through the owners so no two consecutive rounds belong to the same
+// player. `samples` is [{ playerId, songs }]. Stops short if the samples run out
+// rather than repeating a song.
+export function buildCrossoverList(samples, count, random = Math.random) {
+  const queues = shuffled(samples || [], random)
+    .filter((s) => s && s.songs?.length)
+    .map((s) => ({ playerId: s.playerId, songs: shuffled(s.songs, random) }));
+  if (!queues.length) return [];
+
+  const out = [];
+  let i = 0;
+  while (out.length < count && queues.some((q) => q.songs.length)) {
+    const q = queues[i % queues.length];
+    const song = q.songs.shift();
+    if (song) out.push({ kind: "round", song, ownerId: q.playerId, contributedBy: null });
+    i++;
+  }
+  return out;
+}
+
+// Crossover scoring. The owner is meant to get their own artist, so they score
+// normally — the drama is an outsider beating them on their own turf, which pays
+// double. An owner who left the room counts as a miss, so everyone can steal.
+export function scoreFinaleRound(results, ownerId) {
+  const owner = (results || []).find((r) => r.playerId === ownerId);
+  const ownerGuesses = owner?.won ? owner.guessCount : Infinity;
+
+  return (results || []).map((r) => {
+    const isOwner = r.playerId === ownerId;
+    if (!r.won) return { ...r, points: 0, stole: false, isOwner };
+    const base = scoreForResult({ won: true, guessCount: r.guessCount });
+    if (isOwner) return { ...r, points: base, stole: false, isOwner };
+    const stole = r.guessCount < ownerGuesses;
+    return { ...r, points: stole ? base * 2 : base, stole, isOwner };
+  });
+}
