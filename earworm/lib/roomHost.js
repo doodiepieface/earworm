@@ -29,6 +29,7 @@ export function createHost({ mode = "shared", random = Math.random } = {}) {
     poolSongs: [],
     contributions: [],
     claims: {}, // playerId -> artist name (superfan)
+    withFinale: true, // superfan: run the crossover finale at all
     samples: new Map(), // playerId -> songs[] (superfan)
     list: [],
     index: -1,
@@ -79,8 +80,9 @@ export function createHost({ mode = "shared", random = Math.random } = {}) {
   function buildList() {
     if (s.mode === "superfan") {
       // Size the finale to the number of distinct artists, so each superfan gets
-      // at least one round on their own turf.
-      const { mastery, finale } = splitPhases(s.rounds, s.samples.size);
+      // at least one round on their own turf. The host can switch it off, in
+      // which case every round is a mastery round.
+      const { mastery, finale } = splitPhases(s.rounds, s.samples.size, s.withFinale);
       const masteryRounds = Array.from({ length: mastery }, () => ({ kind: "mastery" }));
       const samples = [...s.samples.entries()].map(([playerId, songs]) => ({ playerId, songs }));
       s.list = [...masteryRounds, ...buildCrossoverList(samples, finale, s.random)];
@@ -121,10 +123,11 @@ export function createHost({ mode = "shared", random = Math.random } = {}) {
 
   /* ---------- Lifecycle ---------- */
 
-  function start({ rounds, claims, names } = {}) {
+  function start({ rounds, claims, names, withFinale } = {}) {
     s.rounds = rounds || s.rounds || 10;
     if (claims) s.claims = claims;
     if (names) nameLookup = names;
+    if (withFinale !== undefined) s.withFinale = !!withFinale;
     s.index = 0;
     s.results = new Map();
     s.totals = new Map();

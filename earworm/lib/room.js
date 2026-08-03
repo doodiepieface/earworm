@@ -96,6 +96,10 @@ export function joinRoom(code, { self, onEvent, onRoster }) {
         isHost: !!m.isHost,
         mode: m.mode || null,
         depth: m.depth || null,
+        // Explicitly boolean-checked: `m.finale || null` would turn a
+        // deliberate `false` into `null`, and the reader's default would then
+        // quietly switch the finale back on.
+        finale: typeof m.finale === "boolean" ? m.finale : null,
       }));
     onRoster?.(players);
   });

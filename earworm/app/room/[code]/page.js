@@ -113,6 +113,7 @@ function RoomPage() {
   // modes, different actors, so they stay separate flags.
   const [claims, setClaims] = useState([]);
   const [depth, setDepth] = useState("standard");
+  const [withFinale, setWithFinale] = useState(true);
   const [resolving, setResolving] = useState(false);
   const [resolveNote, setResolveNote] = useState("");
 
@@ -159,9 +160,13 @@ function RoomPage() {
   const hostEntry = roster.find((p) => p.isHost);
   const roomMode = isHost ? mode : hostEntry?.mode || undefined;
   const roomDepth = isHost ? depth : hostEntry?.depth || "standard";
+  // Presence carries booleans as-is; `?? true` keeps the default before the
+  // host's entry has landed rather than briefly claiming the finale is off.
+  const roomFinale = isHost ? withFinale : hostEntry?.finale ?? true;
 
   const roomModeRef = useRef(undefined);
   const roomDepthRef = useRef("standard");
+  const roomFinaleRef = useRef(true);
 
   useEffect(() => {
     poolNameRef.current = poolName;
@@ -171,6 +176,7 @@ function RoomPage() {
     claimsRef.current = claims;
     roomModeRef.current = roomMode;
     roomDepthRef.current = roomDepth;
+    roomFinaleRef.current = roomFinale;
     poolChoiceRef.current = poolChoice;
   });
 
@@ -178,8 +184,8 @@ function RoomPage() {
   // client resolves its artist against the same cap.
   useEffect(() => {
     if (!isHost || !conn.current) return;
-    conn.current.track({ mode, depth });
-  }, [isHost, mode, depth, phase]);
+    conn.current.track({ mode, depth, finale: withFinale });
+  }, [isHost, mode, depth, withFinale, phase]);
 
   /* ---------------- Identity ---------------- */
 
@@ -256,9 +262,16 @@ function RoomPage() {
     knownIds.current = new Set(rosterRef.current.map((p) => p.id));
 
     conn.current?.send("start", { rounds, poolName: "Superfan", poolSpec: null });
+
+    const begin = () => emit(h.start({ rounds, claims: claimMap, names, withFinale }));
+    if (!withFinale) {
+      // No finale means no crossover list, so there are no samples to wait for.
+      begin();
+      return;
+    }
     // Samples arrive as their own broadcasts in response to `start`; give them a
     // moment to land before the crossover list is built out of them.
-    setTimeout(() => emit(h.start({ rounds, claims: claimMap, names })), 1500);
+    setTimeout(begin, 1500);
   }
 
   function startGame() {
@@ -377,7 +390,7 @@ function RoomPage() {
       // Superfan: hand the host this player's slice of the crossover finale.
       // Sent on `start` rather than on claim, so re-picking an artist can't
       // leave a stale sample behind.
-      if (roomModeRef.current === "superfan" && myPool.current.length) {
+      if (roomModeRef.current === "superfan" && roomFinaleRef.current && myPool.current.length) {
         conn.current?.send("sample", {
           playerId: meId.current,
           songs: shuffled(myPool.current).slice(0, SUPERFAN_SAMPLE_SIZE),
@@ -594,6 +607,7 @@ function RoomPage() {
         isHost,
         mode: isHost ? mode : null,
         depth: isHost ? depth : null,
+        finale: isHost ? withFinale : null,
       },
       onEvent: (e, p) => eventHandler.current(e, p),
       onRoster: (r) => rosterHandler.current(r),
@@ -1005,6 +1019,8 @@ function RoomPage() {
           onClaim={claimArtist}
           depth={roomDepth}
           onDepth={setDepth}
+          withFinale={roomFinale}
+          onWithFinale={setWithFinale}
           isHost={isHost}
           resolving={resolving}
           resolveNote={resolveNote}

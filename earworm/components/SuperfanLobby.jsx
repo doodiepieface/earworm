@@ -15,6 +15,8 @@ export default function SuperfanLobby({
   onClaim,
   depth,
   onDepth,
+  withFinale,
+  onWithFinale,
   isHost,
   resolving,
   resolveNote,
@@ -92,6 +94,44 @@ export default function SuperfanLobby({
           ))}
           {claims.length === 0 && <li className="dim">Nobody&rsquo;s claimed yet.</li>}
         </ul>
+      </section>
+
+      {/* Everyone sees what the format is, not just the host — otherwise the
+          rules of the game they're about to play are invisible to them. */}
+      <section className="section">
+        <p className="eyebrow">Format</p>
+        {isHost ? (
+          <label className="check">
+            <input
+              type="checkbox"
+              checked={withFinale}
+              onChange={(e) => onWithFinale(e.target.checked)}
+            />
+            <span>Finish with a crossover finale</span>
+          </label>
+        ) : (
+          <p>
+            <strong>{withFinale ? "Mastery, then a crossover finale" : "Mastery only"}</strong>
+          </p>
+        )}
+
+        {withFinale ? (
+          <p className="dim">
+            Most rounds you each hear a song from your <em>own</em> artist at the
+            same time — that&rsquo;s the mastery half, and it asks whether you
+            really know your pick. The last few rounds are the finale: everyone
+            hears the <em>same</em> song, pulled from one player&rsquo;s artist.
+            The owner is expected to get it, so anyone who beats them on their
+            own artist scores <strong>double</strong>. Every player&rsquo;s
+            artist gets at least one finale round.
+          </p>
+        ) : (
+          <p className="dim">
+            Every round, you each hear a song from your <em>own</em> artist at
+            the same time. Purely who knows their own pick best — nobody ever
+            guesses anyone else&rsquo;s artist, and there are no steals.
+          </p>
+        )}
       </section>
 
       {isHost && (

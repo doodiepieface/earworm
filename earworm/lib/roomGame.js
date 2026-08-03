@@ -157,10 +157,12 @@ export function mergeRoomHistory(local, remote) {
 
 /* ---------------- Superfan mode ---------------- */
 
-// The longest game a host can pick is 20 rounds, which splits to 13 mastery
-// rounds. A pool smaller than that would exhaust the shuffle bag and start
-// repeating songs inside one game, so the floor sits just above it.
-export const MIN_SUPERFAN_POOL = 15;
+// With the crossover finale switched off, every one of the longest game's 20
+// rounds is a mastery round drawn from one player's own pool — so the pool has
+// to cover all 20 or the shuffle bag wraps and starts repeating songs inside a
+// single game. 20 songs for 20 rounds is exactly enough: the bag empties on the
+// last pick rather than before it.
+export const MIN_SUPERFAN_POOL = 20;
 
 // How many songs each player contributes to the crossover finale.
 export const SUPERFAN_SAMPLE_SIZE = 6;
@@ -178,8 +180,10 @@ export const DEPTH_CAPS = { hits: 25, standard: 60, deep: Infinity };
 // leaves the third player's artist unplayed. Mastery always keeps one round, so
 // a room with more players than rounds still can't feature everyone; the lobby
 // warns about that rather than this function pretending otherwise.
-export function splitPhases(rounds, playerCount = 0) {
+export function splitPhases(rounds, playerCount = 0, withFinale = true) {
   const total = Math.max(3, rounds || 0);
+  // Finale off: the whole game is everyone on their own artist, in parallel.
+  if (!withFinale) return { mastery: total, finale: 0 };
   let finale = Math.max(2, Math.round(total / 3), playerCount || 0);
   finale = Math.min(finale, total - 1);
   let mastery = total - finale;
