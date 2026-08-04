@@ -48,7 +48,11 @@ export const ROOM_EVENTS = [
 // broadcast including this client's own — the host runs the same handlers as
 // everyone else, so there's one code path for rendering a round rather than two.
 // `onRoster(players)` fires on every presence change.
-export function joinRoom(code, { self, onEvent, onRoster }) {
+// `onStatus(state)` reports "subscribed" | "disconnected". Mobile browsers
+// suspend backgrounded tabs and drop the socket, so reconnects are routine
+// rather than exceptional — callers use this to recover instead of assuming a
+// vanished player left for good.
+export function joinRoom(code, { self, onEvent, onRoster, onStatus }) {
   const client = getClient();
   if (!client) {
     throw new Error("Multiplayer isn't configured on this deployment.");
@@ -81,8 +85,7 @@ export function joinRoom(code, { self, onEvent, onRoster }) {
 
   channel.on("presence", { event: "sync" }, () => {
     const state = channel.presenceState();
-    // presenceState() gives { key: [meta, ...] }; one meta per connection, and a
-    // reconnecting client can briefly have two. Keep the first per key.
+    // presenceState() gives { key: [meta, ...] }.
     const players = Object.values(state)
       // LAST meta, not first. Presence keeps a list per key and appends on every
       // track(), so a host who changes a room setting ends up with both the old
@@ -108,9 +111,18 @@ export function joinRoom(code, { self, onEvent, onRoster }) {
     onRoster?.(players);
   });
 
+  // The LIVE metadata for this client, not the join-time snapshot. A reconnect
+  // re-tracks from here, so a host that changed the depth or the finale toggle
+  // and then backgrounded its tab doesn't silently republish its original
+  // settings on the way back.
+  let meta = { ...self };
+
   channel.subscribe(async (status) => {
     if (status === "SUBSCRIBED") {
-      await channel.track(self);
+      await channel.track(meta);
+      onStatus?.("subscribed");
+    } else if (status === "CHANNEL_ERROR" || status === "TIMED_OUT" || status === "CLOSED") {
+      onStatus?.("disconnected");
     }
   });
 
@@ -121,8 +133,9 @@ export function joinRoom(code, { self, onEvent, onRoster }) {
     // Re-publish this client's presence metadata. The host uses it when a
     // room-wide setting changes (e.g. the depth selector) so everyone —
     // including whoever joins next — reads the current value.
-    track(meta) {
-      return channel.track({ ...self, ...meta });
+    track(patch) {
+      meta = { ...meta, ...patch };
+      return channel.track(meta);
     },
     leave() {
       try {

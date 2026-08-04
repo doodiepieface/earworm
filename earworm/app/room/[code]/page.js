@@ -41,6 +41,11 @@ const SCORE_AUTO_ADVANCE_MS = 8000;
 // person who finishes last sees the song they just guessed for a few
 // milliseconds before being yanked to the standings.
 const REVEAL_MS = 2000;
+// How long guests wait for a vanished host before giving up. Mobile browsers
+// suspend backgrounded tabs and drop the socket, so a host who glances at
+// another app looks exactly like a host who left — this is the difference
+// between the two, and it has to be generous enough to cover a real glance.
+const HOST_GRACE_MS = 45000;
 
 // The guess list is keyed on song id, so a repeated id makes React warn and can
 // drop rows. A crossover song can already be in your own pool (it's your artist
@@ -116,6 +121,10 @@ function RoomPage() {
   const [withFinale, setWithFinale] = useState(true);
   const [resolving, setResolving] = useState(false);
   const [resolveNote, setResolveNote] = useState("");
+  // The host's connection has dropped but the grace period hasn't expired.
+  // Deliberately NOT a phase: phases are destinations, this is a suspension of
+  // whatever the player was already doing, and it has to be reversible.
+  const [hostAway, setHostAway] = useState(false);
 
   const meId = useRef(null);
   const conn = useRef(null);
@@ -123,6 +132,7 @@ function RoomPage() {
   const capTimer = useRef(null);
   const advanceTimer = useRef(null);
   const revealTimer = useRef(null);
+  const hostGraceTimer = useRef(null);
   const roundStartedAt = useRef(0);
   // Highest round index already scored, so a round can't be closed twice.
   const closedFor = useRef(-1);
@@ -584,13 +594,39 @@ function RoomPage() {
     }
   }
 
+  // Fires when the socket comes back — routinely, on mobile, because suspending
+  // a tab drops it. The host has to actively repair the room here: while it was
+  // gone nobody could advance a round, and guests may have been sitting on a
+  // frozen screen.
+  function handleStatus(state) {
+    if (state !== "subscribed" || !isHost) return;
+
+    // Forget who we'd already greeted, so the next roster sync re-sends claims
+    // and re-syncs every player rather than assuming they're all up to date.
+    knownIds.current = new Set();
+
+    const h = host.current;
+    const midGame = h && h.roundIndex() >= 0 && phaseRef.current !== "ended";
+    if (!midGame) return;
+
+    // Put everyone back on the current round. It restarts that round rather
+    // than resuming mid-way, which is the honest outcome: the timers froze with
+    // the tab, so nobody's elapsed time meant anything any more.
+    closedFor.current = -1;
+    clearTimeout(capTimer.current);
+    clearTimeout(revealTimer.current);
+    emit(h.currentDirective());
+  }
+
   // Latest-ref pattern: the channel is joined once per room, but the handlers
   // must see current state. Declared before the join effect so it runs first.
   const eventHandler = useRef(handleEvent);
   const rosterHandler = useRef(handleRoster);
+  const statusHandler = useRef(handleStatus);
   useEffect(() => {
     eventHandler.current = handleEvent;
     rosterHandler.current = handleRoster;
+    statusHandler.current = handleStatus;
   });
 
   /* ---------------- Join the channel ---------------- */
@@ -611,6 +647,7 @@ function RoomPage() {
       },
       onEvent: (e, p) => eventHandler.current(e, p),
       onRoster: (r) => rosterHandler.current(r),
+      onStatus: (st) => statusHandler.current(st),
     });
     conn.current = c;
     setPhase((prev) => (prev === "connecting" || prev === "naming" ? "lobby" : prev));
@@ -627,6 +664,7 @@ function RoomPage() {
       clearTimeout(capTimer.current);
       clearTimeout(advanceTimer.current);
       clearTimeout(revealTimer.current);
+      clearTimeout(hostGraceTimer.current);
       clearTimeout(addDebounce.current);
     },
     []
@@ -795,14 +833,30 @@ function RoomPage() {
     }
   }, [roster, phase, isHost]);
 
-  // The host's browser is the server, so its departure ends the room.
+  // The host's browser is the server, so losing it stops the room — but a
+  // suspended mobile tab drops presence exactly like a closed one, and the old
+  // behaviour (close immediately, permanently) meant glancing at another app
+  // killed the game for everyone with no way back. Wait out a grace period, and
+  // recover the moment the host reappears.
   useEffect(() => {
     if (isHost || phase === "connecting" || phase === "naming" || phase === "closed") return;
     if (roster.length === 0) return; // presence hasn't settled yet
-    if (roster.some((p) => p.isHost)) return;
-    clearTimeout(capTimer.current);
-    setNotice("The host ended the room.");
-    setPhase("closed");
+
+    if (roster.some((p) => p.isHost)) {
+      clearTimeout(hostGraceTimer.current);
+      hostGraceTimer.current = null;
+      setHostAway(false);
+      return;
+    }
+
+    if (hostGraceTimer.current) return; // already counting down
+    setHostAway(true);
+    clearTimeout(capTimer.current); // don't score a round nobody can close
+    hostGraceTimer.current = setTimeout(() => {
+      hostGraceTimer.current = null;
+      setNotice("The host left the room.");
+      setPhase("closed");
+    }, HOST_GRACE_MS);
   }, [roster, isHost, phase]);
 
   /* ---------------- Render ---------------- */
@@ -859,6 +913,26 @@ function RoomPage() {
       <div className="page center">
         <div className="loader" aria-hidden="true" />
         <p className="load-note">Connecting to room {code}…</p>
+      </div>
+    );
+  }
+
+  // Checked before the game screens but after `closed`, so it suspends whatever
+  // was happening rather than ending it. State is untouched underneath: when
+  // the host returns this simply stops rendering and the room carries on.
+  if (hostAway) {
+    return (
+      <div className="page center">
+        <div className="loader" aria-hidden="true" />
+        <p className="load-note">
+          Lost the host — probably switched apps. Waiting for them to come back…
+        </p>
+        <p className="dim">
+          The room picks up where it left off if they return shortly.
+        </p>
+        <Link href="/" className="link-quiet">
+          Leave the room
+        </Link>
       </div>
     );
   }

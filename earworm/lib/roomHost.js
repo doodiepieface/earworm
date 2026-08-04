@@ -265,6 +265,10 @@ export function createHost({ mode = "shared", random = Math.random } = {}) {
     close,
     replaceDeadSong,
     standings: standingsFromTotals,
+    // Re-emit the round already in progress, without advancing. Used when the
+    // host's tab is restored after being suspended: everyone gets put back on
+    // the same round instead of the room sitting frozen.
+    currentDirective: () => (s.index < 0 ? null : directiveFor(s.index)),
     roundIndex: () => s.index,
     totalRounds: () => s.list.length,
     currentEntry: () => s.list[s.index] || null,
