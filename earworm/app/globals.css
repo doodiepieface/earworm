@@ -1890,3 +1890,97 @@ code {
   outline: 2px solid var(--accent);
   outline-offset: 2px;
 }
+
+/* ---- End-of-game guess breakdown ---- */
+
+.gd {
+  display: grid;
+  gap: 14px;
+  margin: 18px 0;
+}
+
+.gd-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: grid;
+  gap: 18px;
+}
+
+.gd-list li.me .gd-name {
+  color: var(--ink);
+  font-weight: 600;
+}
+
+.gd-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 12px;
+  margin-bottom: 6px;
+}
+
+.gd-name {
+  font-family: var(--font-display), serif;
+  font-size: 1.05rem;
+}
+
+.gd-summary {
+  font-size: 0.82rem;
+}
+
+.gd-bars {
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+  gap: 6px;
+  align-items: end;
+}
+
+.gd-col {
+  display: grid;
+  grid-template-rows: auto 56px auto;
+  gap: 4px;
+  justify-items: center;
+  align-items: end;
+}
+
+.gd-count {
+  font-size: 0.7rem;
+  color: var(--muted);
+  line-height: 1;
+  min-height: 0.8em;
+}
+
+.gd-bar {
+  width: 100%;
+  max-width: 26px;
+  /* A zero-count column still shows a hairline, so the axis reads as a row of
+     slots rather than gaps. */
+  height: max(2px, var(--h, 0%));
+  border-radius: 4px 4px 2px 2px;
+  background: var(--surface-2);
+  align-self: end;
+}
+
+.gd-col.has .gd-bar {
+  background: var(--accent);
+}
+
+.gd-col.has .gd-count {
+  color: var(--ink);
+}
+
+.gd-miss.has .gd-bar {
+  background: var(--wrong);
+}
+
+.gd-tick {
+  font-size: 0.68rem;
+  color: var(--muted);
+  line-height: 1;
+}
+
+.gd-note {
+  margin: 0;
+  font-size: 0.8rem;
+}

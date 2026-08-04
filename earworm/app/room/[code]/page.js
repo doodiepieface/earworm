@@ -6,6 +6,7 @@ import { useParams, useRouter, useSearchParams } from "next/navigation";
 import RoundBoard from "@/components/RoundBoard";
 import RoundOutcome from "@/components/RoundOutcome";
 import Scoreboard from "@/components/Scoreboard";
+import GuessDistribution from "@/components/GuessDistribution";
 import packs, { getPack } from "@/data/packs";
 import { joinRoom, isRoomsEnabled } from "@/lib/room";
 import { createHost } from "@/lib/roomHost";
@@ -1023,6 +1024,7 @@ function RoomPage() {
           )}
         </h1>
         <Scoreboard totals={totals} meId={meId.current} final />
+        <GuessDistribution players={totals} meId={meId.current} />
         <div className="room-actions">
           {isHost && (
             <>

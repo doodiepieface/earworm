@@ -19,7 +19,7 @@ import {
   sortStandings,
   ROUND_CAP_MS,
 } from "./roomGame.js";
-import { pickStartOffset } from "./gameState.js";
+import { pickStartOffset, MAX_GUESSES } from "./gameState.js";
 
 export function createHost({ mode = "shared", random = Math.random } = {}) {
   const s = {
@@ -38,6 +38,9 @@ export function createHost({ mode = "shared", random = Math.random } = {}) {
     redrawnFor: -1,
     closedIndex: -1, // last round already scored; guards double-counting
   };
+
+  // dist[i] = rounds won on guess i+1, matching the shape solo stats already use.
+  const emptyTotal = () => ({ score: 0, timeMs: 0, dist: [0, 0, 0, 0, 0, 0], misses: 0 });
 
   let nameLookup = {};
   function nameFor(id) {
@@ -196,8 +199,20 @@ export function createHost({ mode = "shared", random = Math.random } = {}) {
     }
 
     for (const r of results) {
-      const prev = s.totals.get(r.playerId) || { score: 0, timeMs: 0 };
-      s.totals.set(r.playerId, { score: prev.score + r.points, timeMs: prev.timeMs + r.ms });
+      const prev = s.totals.get(r.playerId) || emptyTotal();
+      const dist = prev.dist.slice();
+      let misses = prev.misses;
+      // Counted on the guess, not the points: a superfan's own pick scores zero
+      // but they still named it, and the distribution is about how well people
+      // guessed rather than how the scoring treated it.
+      if (r.won) dist[Math.min(Math.max(r.guessCount, 1), MAX_GUESSES) - 1] += 1;
+      else misses += 1;
+      s.totals.set(r.playerId, {
+        score: prev.score + r.points,
+        timeMs: prev.timeMs + r.ms,
+        dist,
+        misses,
+      });
     }
 
     return {
@@ -222,8 +237,15 @@ export function createHost({ mode = "shared", random = Math.random } = {}) {
         : [...s.totals.keys()].map((id) => ({ id, name: nameFor(id) }));
     return sortStandings(
       people.map((p) => {
-        const t = s.totals.get(p.id) || { score: 0, timeMs: 0 };
-        return { id: p.id, name: p.name, score: t.score, timeMs: t.timeMs };
+        const t = s.totals.get(p.id) || emptyTotal();
+        return {
+          id: p.id,
+          name: p.name,
+          score: t.score,
+          timeMs: t.timeMs,
+          dist: t.dist,
+          misses: t.misses,
+        };
       })
     );
   }
