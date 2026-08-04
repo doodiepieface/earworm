@@ -24,6 +24,7 @@ import {
 } from "@/lib/roomGame";
 import { pickSong, pickStartOffset } from "@/lib/gameState";
 import SuperfanLobby from "@/components/SuperfanLobby";
+import ArtistLoading from "@/components/ArtistLoading";
 import { resolveTracks, streamArtistPool, searchGuesses } from "@/lib/itunes";
 import {
   getPlayerId,
@@ -114,14 +115,13 @@ function RoomPage() {
   const [newArtist, setNewArtist] = useState("");
   const poolChoiceRef = useRef(null);
 
-  // Superfan lobby. `resolving` is this player pulling their OWN artist, which
-  // is distinct from `preparing` (the host pulling the shared pool) — different
-  // modes, different actors, so they stay separate flags.
+  // Superfan lobby. Claims are just names here — catalogs are pulled at start.
   const [claims, setClaims] = useState([]);
   const [depth, setDepth] = useState("standard");
   const [withFinale, setWithFinale] = useState(true);
-  const [resolving, setResolving] = useState(false);
-  const [resolveNote, setResolveNote] = useState("");
+  // Live artist-resolution progress, keyed by player, shown to everyone.
+  const [loadingRows, setLoadingRows] = useState([]);
+  const loadingRef = useRef([]);
   // The host's connection has dropped but the grace period hasn't expired.
   // Deliberately NOT a phase: phases are destinations, this is a suspension of
   // whatever the player was already doing, and it has to be reversible.
@@ -186,6 +186,7 @@ function RoomPage() {
     roomDepthRef.current = roomDepth;
     roomFinaleRef.current = roomFinale;
     poolChoiceRef.current = poolChoice;
+    loadingRef.current = loadingRows;
   });
 
   // Host only: re-publish presence when the depth selector changes, so every
@@ -222,19 +223,28 @@ function RoomPage() {
     emit(host.current?.next());
   }
 
-  // Superfan: every player resolves their OWN artist in their OWN browser. That
-  // spread is what makes the mode viable — one host resolving five catalogs
-  // through the shared iTunes proxy would crawl.
-  async function claimArtist(artist) {
-    // The host's depth, not this client's local default — an unequal cap would
-    // quietly break the fairness the setting exists to provide.
-    const cap = DEPTH_CAPS[roomDepthRef.current] ?? DEPTH_CAPS.standard;
-    setResolveNote(`Pulling ${artist}…`);
-    setResolving(true);
+  // Claiming is instant: it records the name and nothing else. Resolving here
+  // froze each pool at whatever depth happened to be set in that moment, so
+  // changing the depth afterwards did nothing for anyone who had already
+  // claimed. The catalogs are pulled at start instead, from the final settings.
+  function claimArtist(artist) {
+    conn.current?.send("claim", { playerId: meId.current, name, artist });
+  }
+
+  // Runs on every client when the host starts. Each player pulls their OWN
+  // artist in their OWN browser — that spread is what makes the mode viable,
+  // since one host resolving five catalogs through the shared iTunes proxy
+  // would crawl — and broadcasts progress so the wait is a shared moment.
+  async function resolveMyArtist(artist, depthKey) {
+    const cap = DEPTH_CAPS[depthKey] ?? DEPTH_CAPS.standard;
     myPool.current = [];
     myPlayed.current = new Set();
     myLastId.current = null;
 
+    const report = (count, done) =>
+      conn.current?.send("loading", { playerId: meId.current, name, artist, count, done });
+
+    report(0, false);
     const collected = [];
     await streamArtistPool(artist, {
       // Doubles as the depth cap: streamArtistPool checks this between album
@@ -243,43 +253,56 @@ function RoomPage() {
       isAborted: () => collected.length >= cap,
       onSong: (song) => {
         if (collected.length < cap) collected.push(song);
-        if (collected.length % 10 === 0) {
-          setResolveNote(`Pulling ${artist}… ${collected.length} songs`);
-        }
+        if (collected.length % 5 === 0) report(collected.length, false);
       },
     });
 
-    const playable = dedupeById(collected.filter((s) => s.previewUrl)).slice(0, cap);
+    const playable = dedupeById(collected.filter((x) => x.previewUrl)).slice(0, cap);
     myPool.current = playable;
-    setResolving(false);
-    setResolveNote("");
-    conn.current?.send("claim", {
-      playerId: meId.current,
-      name,
-      artist,
-      songCount: playable.length,
-      ready: playable.length >= MIN_SUPERFAN_POOL,
-    });
+
+    if (roomFinaleRef.current && playable.length) {
+      conn.current?.send("sample", {
+        playerId: meId.current,
+        songs: shuffled(playable).slice(0, SUPERFAN_SAMPLE_SIZE),
+      });
+    }
+    report(playable.length, true);
   }
 
   function startSuperfanGame() {
     closedFor.current = -1;
+    knownIds.current = new Set(rosterRef.current.map((p) => p.id));
+    // `start` no longer begins the game — it begins the LOADING step. Every
+    // client resolves its own artist at the depth carried here, reports
+    // progress, and the host builds the round list once everyone is done.
+    conn.current?.send("start", {
+      rounds,
+      poolName: "Superfan",
+      poolSpec: null,
+      depth,
+      withFinale,
+    });
+  }
+
+  // Host only: everyone has finished pulling their catalog, so the game can be
+  // built. The smallest pool clamps the mastery rounds, which is only knowable
+  // now — it's the reason resolution happens before the round list exists.
+  function beginSuperfanRounds() {
     const h = host.current;
+    if (!h || h.roundIndex() >= 0) return; // already running
+    const rows = loadingRef.current;
     const claimMap = Object.fromEntries(claimsRef.current.map((c) => [c.playerId, c.artist]));
     const names = Object.fromEntries(rosterRef.current.map((p) => [p.id, p.name]));
-    knownIds.current = new Set(rosterRef.current.map((p) => p.id));
-
-    conn.current?.send("start", { rounds, poolName: "Superfan", poolSpec: null });
-
-    const begin = () => emit(h.start({ rounds, claims: claimMap, names, withFinale }));
-    if (!withFinale) {
-      // No finale means no crossover list, so there are no samples to wait for.
-      begin();
-      return;
-    }
-    // Samples arrive as their own broadcasts in response to `start`; give them a
-    // moment to land before the crossover list is built out of them.
-    setTimeout(begin, 1500);
+    const smallest = rows.length ? Math.min(...rows.map((r) => r.count || 0)) : 0;
+    emit(
+      h.start({
+        rounds,
+        claims: claimMap,
+        names,
+        withFinale,
+        maxMastery: smallest,
+      })
+    );
   }
 
   function startGame() {
@@ -362,6 +385,29 @@ function RoomPage() {
       return;
     }
 
+    if (event === "loading") {
+      setLoadingRows((prev) => {
+        const rest = prev.filter((r) => r.playerId !== payload.playerId);
+        const next = [...rest, payload].sort((a, b) => a.name.localeCompare(b.name));
+        loadingRef.current = next;
+        return next;
+      });
+      // The host decides when everyone is ready. Checked here rather than in an
+      // effect so it can't miss the final report between renders.
+      if (isHost && payload.done) {
+        const ids = rosterRef.current.map((p) => p.id);
+        const rows = [
+          ...loadingRef.current.filter((r) => r.playerId !== payload.playerId),
+          payload,
+        ];
+        loadingRef.current = rows;
+        if (ids.every((id) => rows.find((r) => r.playerId === id)?.done)) {
+          beginSuperfanRounds();
+        }
+      }
+      return;
+    }
+
     if (event === "sample" && isHost) {
       host.current?.setSample(payload.playerId, payload.songs);
       return;
@@ -395,14 +441,15 @@ function RoomPage() {
     }
 
     if (event === "start") {
-      // Superfan: hand the host this player's slice of the crossover finale.
-      // Sent on `start` rather than on claim, so re-picking an artist can't
-      // leave a stale sample behind.
-      if (roomModeRef.current === "superfan" && roomFinaleRef.current && myPool.current.length) {
-        conn.current?.send("sample", {
-          playerId: meId.current,
-          songs: shuffled(myPool.current).slice(0, SUPERFAN_SAMPLE_SIZE),
-        });
+      if (roomModeRef.current === "superfan") {
+        // Not the game yet — the loading step. Resolve our own artist at the
+        // depth the host settled on, which is carried here rather than read
+        // locally so nobody uses a stale setting.
+        setLoadingRows([]);
+        loadingRef.current = [];
+        setPhase("loading");
+        const mine = claimsRef.current.find((c) => c.playerId === meId.current);
+        if (mine?.artist) resolveMyArtist(mine.artist, payload.depth || roomDepthRef.current);
       }
       setLocked(true);
       setTotals([]);
@@ -520,6 +567,8 @@ function RoomPage() {
       if (roomModeRef.current === "superfan") {
         // Everyone re-claims, so drop the old artist and its shuffle-bag state.
         setClaims([]);
+        setLoadingRows([]);
+        loadingRef.current = [];
         myPool.current = [];
         myPlayed.current = new Set();
         myLastId.current = null;
@@ -928,6 +977,23 @@ function RoomPage() {
     );
   }
 
+  if (phase === "loading") {
+    // Everyone sees everyone's progress — five private spinners would make a
+    // shared wait feel like five separate stalls.
+    const rows = roster.map((p) => {
+      const row = loadingRows.find((r) => r.playerId === p.id);
+      const claim = claims.find((c) => c.playerId === p.id);
+      return {
+        playerId: p.id,
+        name: p.name,
+        artist: row?.artist || claim?.artist || "",
+        count: row?.count || 0,
+        done: !!row?.done,
+      };
+    });
+    return <ArtistLoading players={rows} meId={meId.current} />;
+  }
+
   if (phase === "playing" && round) {
     return (
       <div className="page game room-game">
@@ -1080,7 +1146,7 @@ function RoomPage() {
 
   /* ---------------- Lobby ---------------- */
 
-  const readyClaims = claims.filter((c) => c.ready);
+  const readyClaims = claims.filter((c) => c.artist);
   const canStart =
     isHost &&
     roster.length >= MIN_PLAYERS &&
@@ -1125,8 +1191,6 @@ function RoomPage() {
           withFinale={roomFinale}
           onWithFinale={setWithFinale}
           isHost={isHost}
-          resolving={resolving}
-          resolveNote={resolveNote}
         />
       )}
 
@@ -1276,7 +1340,7 @@ function RoomPage() {
                 : mode === "superfan"
                 ? `Waiting on ${roster.length - readyClaims.length} player${
                     roster.length - readyClaims.length === 1 ? "" : "s"
-                  } to claim an artist…`
+                  } to pick an artist…`
                 : preparing
                 ? "Waiting for the pool to finish loading…"
                 : "Not enough playable songs yet."}

@@ -30,6 +30,7 @@ export function createHost({ mode = "shared", random = Math.random } = {}) {
     contributions: [],
     claims: {}, // playerId -> artist name (superfan)
     withFinale: true, // superfan: run the crossover finale at all
+    maxMastery: 0, // superfan: smallest personal pool; 0 = unknown/no clamp
     samples: new Map(), // playerId -> songs[] (superfan)
     list: [],
     index: -1,
@@ -85,7 +86,12 @@ export function createHost({ mode = "shared", random = Math.random } = {}) {
       // Size the finale to the number of distinct artists, so each superfan gets
       // at least one round on their own turf. The host can switch it off, in
       // which case every round is a mastery round.
-      const { mastery, finale } = splitPhases(s.rounds, s.samples.size, s.withFinale);
+      let { mastery, finale } = splitPhases(s.rounds, s.samples.size, s.withFinale);
+      // Nobody can play more mastery rounds than the smallest personal pool has
+      // songs, or that player's shuffle bag wraps and repeats mid-game. Pool
+      // sizes are only known once everyone has resolved, which is why this is a
+      // clamp here rather than a gate in the lobby.
+      if (s.maxMastery > 0) mastery = Math.min(mastery, s.maxMastery);
       const masteryRounds = Array.from({ length: mastery }, () => ({ kind: "mastery" }));
       const samples = [...s.samples.entries()].map(([playerId, songs]) => ({ playerId, songs }));
       s.list = [...masteryRounds, ...buildCrossoverList(samples, finale, s.random)];
@@ -126,11 +132,12 @@ export function createHost({ mode = "shared", random = Math.random } = {}) {
 
   /* ---------- Lifecycle ---------- */
 
-  function start({ rounds, claims, names, withFinale } = {}) {
+  function start({ rounds, claims, names, withFinale, maxMastery } = {}) {
     s.rounds = rounds || s.rounds || 10;
     if (claims) s.claims = claims;
     if (names) nameLookup = names;
     if (withFinale !== undefined) s.withFinale = !!withFinale;
+    if (maxMastery !== undefined) s.maxMastery = maxMastery || 0;
     s.index = 0;
     s.results = new Map();
     s.totals = new Map();

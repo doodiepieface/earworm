@@ -1988,3 +1988,60 @@ code {
 .tie-note {
   margin: -6px 0 18px;
 }
+
+/* ---- Superfan artist loading ---- */
+
+.artist-loading {
+  gap: 14px;
+}
+
+.al-list {
+  list-style: none;
+  padding: 0;
+  margin: 8px 0 0;
+  width: 100%;
+  max-width: 460px;
+  display: grid;
+  gap: 2px;
+}
+
+.al-list li {
+  display: grid;
+  grid-template-columns: 1fr 1.3fr auto;
+  gap: 12px;
+  align-items: baseline;
+  text-align: left;
+  padding: 9px 0;
+  border-bottom: 1px solid var(--line);
+}
+
+.al-list li:last-child {
+  border-bottom: 0;
+}
+
+.al-list li.me .al-who {
+  color: var(--ink);
+  font-weight: 600;
+}
+
+.al-who {
+  color: var(--muted);
+}
+
+.al-artist {
+  font-family: var(--font-display), serif;
+  font-size: 1.02rem;
+}
+
+.al-count {
+  color: var(--muted);
+  font-size: 0.8rem;
+}
+
+.al-count.is-done {
+  color: var(--win);
+}
+
+.al-count.is-short {
+  color: var(--warn);
+}
