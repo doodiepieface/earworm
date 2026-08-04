@@ -10,7 +10,13 @@ A Songless/Heardle-style guess-the-song web game. Play a snippet, guess the trac
 
 The owner is comfortable with coding basics but not an expert: explain changes in plain terms, avoid introducing heavy tooling (TypeScript, Tailwind, test frameworks) unless asked.
 
-**No browser/build is run during most edits.** There's no automated test suite, and building while `npm run dev` is running corrupts `.next` — so logic changes are typically verified with throwaway Node scripts against the live iTunes API (matching, dedupe, guess correctness, etc.) rather than in-app. Prefer that pattern.
+**No browser/build is run during most edits.** There's no automated test suite, and building while `npm run dev` is running corrupts `.next` — so logic changes are typically verified with throwaway Node scripts against the live iTunes API (matching, dedupe, guess correctness, etc.) rather than in-app. Prefer that pattern. (Killing the dev server's *shell* doesn't always kill the node child — check port 3000 is actually free before building.)
+
+**How verification actually works here, and where it's blind:**
+- **Pure logic → Node scripts in the scratchpad.** `lib/roomGame.js`, `lib/roomHost.js`, and `lib/itunes.js` helpers are all reachable this way; the room engine can be driven through entire games. Scripts must import via an absolute `file:///` URL (relative paths resolve against the *script's* directory, not the cwd) and the target modules need explicit `.js` extensions.
+- **Realtime → two real clients** against the live Supabase project. This is how the presence semantics above were established. Test the real `joinRoom`, not a hand-rolled lookalike — an early lookalike gave a *false* failure because supabase-js only maintains the presence cache on channels that have a presence listener.
+- **`next build` does NOT catch undefined variables.** Next's ESLint config leaves `no-undef` off for plain JS, so a missing `useState` declaration only surfaces at runtime. There's no linter installed. Cheap substitute after editing a big client component: cross-check every `setX(` called against every `const [x, setX]` declared, and every `.current` against every `useRef`.
+- **Route smoke tests (`curl`) can't reach room UI.** The lobby and game only render after a realtime connection, so a 200 proves the route compiles and nothing more. Anything behind the channel needs two browser profiles; superfan's steal rule needs three.
 
 **Working style:** the owner has connected the Vercel + Cloudflare (+ Supabase) MCP servers and asked that env-var and domain/DNS tasks be done directly through those tools rather than handed back as manual dashboard steps. MCP tools only load after a session reload once authorized.
 
@@ -86,40 +92,80 @@ So "match the explicit/clean version the player has in Spotify" is not implement
 - `components/SpotifyNavLink.jsx` — renders the nav "Spotify" link **only if this browser has connected** (`isConnected()`). See the Spotify-UI-gating section below.
 - `lib/site.js` — site identity + config used by metadata, sitemap, robots, and social cards: `SITE_URL` (defaults to `https://www.earwormgame.net`, override with `NEXT_PUBLIC_SITE_URL`), name/tagline/description/keywords, `withAppleAffiliate(url)` (appends the affiliate `at`/`ct` tokens when `NEXT_PUBLIC_APPLE_AFFILIATE_TOKEN` is set, else returns the plain link), and `BUYMEACOFFEE_URL` (defaults to the project's page, override/hide with `NEXT_PUBLIC_BUYMEACOFFEE`).
 
+- **Multiplayer files** — `lib/room.js` (Realtime transport), `lib/roomHost.js` (host engine), `lib/roomGame.js` (pure rules), `app/room/page.js` + `app/room/[code]/page.js`, and `components/`: `RoundBoard`, `RoundTimer`, `RoundOutcome`, `Scoreboard`, `GuessDistribution`, `SuperfanLobby`. All documented under "Multiplayer rooms" below rather than here, since they only make sense together.
+
 ## Song identity rules (guess correctness depends on this)
 
 - iTunes-sourced songs get id `it-<trackId>`; Spotify-sourced keep `sp-<spotifyId>` even after matching (see `resolveTracks` — it preserves the caller's id). Because guesses now come from the whole catalog (different ids than the pool), correctness is **`isCorrectGuess(guess, answer)` in `lib/itunes.js`**: an id match is an instant yes, otherwise it accepts any recording whose `normalize()`d title is identical *and* whose artist passes `artistsMatch` — so a different album/version of the right song counts, but a same-titled cover by someone else doesn't. All pool songs carry iTunes `title`/`artist` (even Spotify-sourced ones, from the match), so answers are always reachable by a catalog search.
 
 ## Multiplayer rooms
 
-Live rooms at `/room` (host or join) and `/room/[code]` (lobby + game). Design and plan docs live in `docs/superpowers/` at the repo root.
+Live rooms at `/room` (host or join) and `/room/[code]` (lobby + game). Design and plan docs live in `docs/superpowers/` at the repo root. Two modes: the default **shared pool** (everyone guesses the same pool) and **superfan** (see below).
 
-- **No server, no tables.** A room is a Supabase Realtime channel named `room:<CODE>` — presence carries the roster, broadcast carries the game. Nothing is persisted server-side; close every tab and the room is gone. There's no migration, no RLS, and no cleanup job to maintain.
-- **The host's browser IS the server.** It owns the pool, builds the round list, picks each song, collects results, and computes every score. Everyone else is a thin client. **If the host closes the tab, the room ends** — there is deliberately no host migration.
-- **Requires the Supabase env vars.** `isRoomsEnabled()` is just `isAuthConfigured()`, and every entry point (home CTA, `/room`) hides itself when it's false — same gating pattern as `SpotifyNavLink`.
-- **`lib/room.js` clears stale channels before joining.** Supabase returns the *same* channel object for a repeated topic and throws if listeners are added after `subscribe()`. Without the cleanup, React StrictMode's double-mount crashes the lobby on every dev load. Don't remove it.
-- **`lib/roomGame.js` is pure** (codes, scoring, round list, standings, history merge) so it can be checked with a throwaway Node script. It and `lib/room.js` use **explicit `.js` import extensions** — unlike the rest of the codebase — because plain `node` won't resolve the extensionless form and being node-runnable is the point.
-- **The pool list is never rendered — only a count.** Guess suggestions come from the whole catalog precisely so the pool stays secret; showing 25 lobby titles would put every answer on screen. Players see only their own additions.
-- **Contributions are lobby-only**, 10 per player, capped host-side as well as in the sender's UI, deduped by id and normalized title+artist. No undo — an `add` is already folded into the host's pool by the time it renders.
-- **Round list is half contributions, half host pool**, interleaved so the adds spread across the game instead of front-loading. A song never repeats within a game; a short pool just makes a short game.
-- **Scoring is `7 − N`** (6 for a first-guess win, 1 for the sixth), 0 for a loss or timeout, ties broken on lower total time. **Your own contributed song scores you 0** and is revealed as "Sam's pick" only *after* the round closes.
-- **The 60s round cap is counted per client from its own receipt** of the `round` broadcast, so clock skew between phones can't shave anyone's timer. The host runs its own copy so an AFK player can't stall the room.
-- **No anti-cheat, deliberately.** Every client must know the answer to run `isCorrectGuess`, and each self-reports. Fine among friends; the alternative is server-side answer checking, which fights the app's entirely-client-side architecture.
-- `components/RoundBoard.jsx` is the shared single-round UI (dial + ladder + guess box), used by **both** `/play` and rooms so the rules can't drift. `app/play/page.js` keeps pool loading, the shuffle bag, and stats.
-- **`lib/roomHost.js` is the host-authority engine** — React-free, Supabase-free, DOM-free. It owns the pool, round list, results, and scoring for *both* room modes and returns **directives** (`{ event, payload }`) that the page relays verbatim via `conn.send`. Round and scoring logic belongs here, not in the page: it's the only part that can be driven end-to-end by a plain Node script.
-- `components/RoundTimer.jsx` draws the round countdown but does **not** enforce it — the page still owns the authoritative cap timer and settles via `RoundBoard`'s `forceEnd`. Both anchor on the same round mount (RoundBoard is keyed per round), which is why the bar and the cutoff agree. It renders only when `capMs > 0`, so solo play never shows one.
+### The rule that explains most of the bugs
+
+**A guest's browser knows nothing the host didn't send it.** Nearly every bug in this feature was one instance of that: the room mode, the depth setting, the finale toggle, the pool spec, the artist claims, and the host's own liveness each broke because a guest derived them locally. Only the host's URL has `?host=1&mode=…&pack=…`; a guest opens a bare `/room/CODE`. **If a setting affects everyone, it has to travel — and survive being changed after people join.**
+
+Room-wide settings ride in the **host's presence metadata** (`mode`, `depth`, `finale`), which every client already receives and late joiners get for free. Per-round state travels as broadcasts. Broadcasts have **no replay**, so anything sent before a player joined is gone for them — the host re-sends claims when someone new appears.
+
+### Presence is not what you'd assume
+
+Learned the hard way, verified against the live project with throwaway Node scripts:
+
+- **A key holds a LIST of metas**, and views disagree — a client's own `presenceState()` accumulates metas across `track()` calls while peers may see a replacement. `lib/room.js` reads **`metas[metas.length - 1]`** (newest). Reading `metas[0]` pinned everyone to the value from when the host joined and silently ignored every later change.
+- **Booleans need an explicit type check.** `m.finale || null` turns a deliberate `false` into `null`, and the reader's default then flips the setting back on.
+- **Presence is not a dependable liveness signal.** A stale meta can linger in a peer's view indefinitely after a disconnect. Never treat "missing from the roster" as proof someone left — see the grace period below.
+- `joinRoom` keeps **live** metadata and re-tracks *that* on reconnect, not the join-time snapshot. Otherwise a host who changed a setting republishes its original values on the way back.
+
+### Architecture
+
+- **No server, no tables.** A room is a Supabase Realtime channel named `room:<CODE>`. Nothing is persisted server-side; close every tab and the room is gone. No migration, no RLS, no cleanup job.
+- **The host's browser IS the server.** It owns the pool, builds the round list, picks each song, collects results, computes every score. Everyone else is a thin client. There is deliberately **no host migration**.
+- **`lib/roomHost.js` is that authority, extracted** — React-free, Supabase-free, DOM-free. It serves *both* modes and returns **directives** (`{ event, payload }`) the page relays verbatim via `conn.send`. Round and scoring logic belongs here, not in the page: it's the only part a plain Node script can drive end-to-end, which is how the crossover rules get real coverage.
+- **Requires the Supabase env vars.** `isRoomsEnabled()` is just `isAuthConfigured()`; every entry point hides itself when false, same gating pattern as `SpotifyNavLink`.
+- **`lib/room.js` clears stale channels before joining.** Supabase returns the *same* channel object for a repeated topic and throws if listeners are added after `subscribe()`. Without this, StrictMode's double-mount crashes the lobby on every dev load.
+- **`lib/roomGame.js` and `lib/roomHost.js` use explicit `.js` import extensions** — unlike the rest of the codebase — because plain `node` won't resolve the extensionless form and being node-runnable is the point.
+- **No anti-cheat, deliberately.** Every client must know the answer to run `isCorrectGuess`, and each self-reports. Fine among friends; the alternative fights the app's entirely-client-side architecture.
+
+### Rules
+
+- **Scoring is `7 − N`** (6 for a first-guess win, 1 for the sixth), 0 for a loss or timeout. Ties break on lower total time.
+- **Ties are shown as ties.** The end screen takes *everyone* on the top score, not `totals[0]` — taking the first entry silently handed a shared score to whoever the speed tiebreak happened to order first, which read as "the host always wins". `Scoreboard` uses dense ranking (1, 1, 3).
+- **The 60s cap is counted per client from its own receipt** of the round, so clock skew between phones can't shave anyone's timer. The host runs its own copy so an AFK player can't stall the room.
+- **A round is closed exactly once.** Two paths race to close it — everyone answering, and the cap expiring — and the 2s reveal delay made that overlap reachable. Guarded in both layers: the page won't call close twice, and `roomHost.close()` returns `null` for an already-scored round. Closing twice would double every total.
+- **The scoreboard waits `REVEAL_MS` (2s) after the last answer**, so whoever finishes last actually sees the song.
+- The pool list is **never rendered — only a count.** Guess suggestions come from the whole catalog precisely so the pool stays secret.
+- Contributions are lobby-only, 10 per player, capped host-side as well as in the sender's UI, deduped by id and normalized title+artist. No undo — an `add` is already folded into the host's pool by the time it renders.
+- Shared-mode round list is half contributions, half host pool, interleaved so the adds spread through the game. Your own contributed song scores you 0 and is revealed as "Sam's pick" only *after* the round closes.
+
+### Disconnects and recovery
+
+A mobile browser suspends a backgrounded tab and drops the socket, which looks exactly like leaving. The original behaviour — close the room instantly, permanently — meant a host glancing at another app killed the game for everyone with no way back.
+
+- Guests wait out **`HOST_GRACE_MS` (45s)** on a recoverable "waiting for the host" screen. It is deliberately **not a phase**: phases are destinations, this suspends whatever was happening and leaves the state intact underneath.
+- On reconnect the host clears `knownIds` (so claims and syncs re-send) and **re-broadcasts the current round** via `roomHost.currentDirective()`. Its timers froze with the tab, so the round restarts rather than resuming — everyone's elapsed time had stopped meaning anything.
+- `reset` returns everyone to the lobby with the same code and players so the host can pick a new pool ("new pool, same room"). Pool choice therefore lives in **state, not the URL** — re-navigating would drop the host from presence and trip every guest's host-left check. The host engine is **rebuilt**, since the old one still holds the finished round list and every running total.
+
+### Components
+
+- `components/RoundBoard.jsx` — the shared single-round UI, used by **both** `/play` and rooms so the rules can't drift.
+- `components/RoundTimer.jsx` — draws the countdown, does **not** enforce it. The page owns the authoritative cap and settles via `forceEnd`; both anchor on the same round mount, which is why they agree. Renders only when `capMs > 0`, so solo play never shows one.
+- `components/RoundOutcome.jsx` — your own result before the scoreboard: green or red, and it names the song **either way** (multiplayer used to show one line of grey text, so a win looked like a loss and you never learned what you missed). Carries the Apple Music link.
+- `components/Scoreboard.jsx` — between-round and final standings, steal badges, dense ranking.
+- `components/GuessDistribution.jsx` — end-of-game per-player histogram. Counted on the **guess**, not the points: a superfan's own pick scores zero but they still named it. Bars scale to the busiest column across the whole room, not per player, or every player's tallest bar would look identical.
 
 ### Superfan mode
 
-A second room mode (`/room/<CODE>?host=1&mode=superfan`) where every player claims **their own artist**.
+`/room/<CODE>?host=1&mode=superfan` — every player claims **their own artist**.
 
-- **Two phases.** `splitPhases(rounds)` gives roughly two thirds **mastery** (each player hears songs from their own artist, simultaneously but separately) and one third **crossover** (everyone on the same song, drawn round-robin from the claimed artists). Finale is never under 2 rounds, mastery never under 1.
-- **Mastery rounds carry no song over the wire.** The host broadcasts only `mastery { index, capMs }`; each client picks its own next song locally from its own pool via the existing shuffle bag. This makes mastery rounds *more* private than shared-mode rounds — those songs are never broadcast at all. Crossover songs are broadcast and so are visible in devtools, same no-anti-cheat posture as everywhere else.
-- **Guess scoping differs by phase, deliberately.** Mastery rounds pass `localSongs={myPool}` — your own artist, filtered locally, instant, and you already know whose songs they are. Crossover rounds pass **`localSongs={null}`** and use the full catalog search: the round announces the artist, so a catalog search finds any of their songs. An earlier version scoped crossover to a local pool (your catalog + the crossover songs seen so far), which made the answer the *only* song by that artist in the list — it gave itself away on a near-miss and made every other song by that artist unguessable. Don't reintroduce local scoping here.
-- **Crossover scoring — the owner defends, outsiders steal.** The owner scores the normal `7 − N`. A non-owner who won with *strictly fewer* guesses than the owner (or when the owner missed) scores **double**. Ties don't steal. An owner who left the room counts as a miss, so everyone can steal — the round still plays rather than being dropped, because splicing the list would break the `totalRounds` clients already received.
-- **One claim per artist.** Shared ownership would make "the owner" of a crossover round ambiguous.
-- **`MIN_SUPERFAN_POOL = 15` is not arbitrary:** the longest game (20 rounds) is 13 mastery rounds, and a smaller pool would exhaust the shuffle bag and repeat songs inside one game.
-- **Depth (`DEPTH_CAPS`: hits 25 / standard 60 / deep ∞) is one room-wide setting**, and it is doing two jobs. Fairness — an equal cap keeps a 30-song artist comparable to a 400-song one. And throughput — it's passed as `streamArtistPool`'s `isAborted`, so a Hits game stops after roughly the first search instead of walking a whole discography. Every player resolves their own artist in their own browser; without the cap, five simultaneous deep walks through the single shared iTunes proxy would crawl.
+- **Two phases.** `splitPhases(rounds, playerCount, withFinale)` gives roughly two thirds **mastery** (each player hears their own artist, simultaneously but separately) and one third **crossover** (everyone on the same song, round-robin across the claimed artists). The finale stretches to cover the player count so every superfan gets at least one round on their own turf — a plain one-third split left a 5-round/3-player game with someone's artist unplayed. Mastery always keeps ≥1 round, so a room with more players than rounds still can't feature everyone.
+- **The host can switch the finale off** with a checkbox; then every round is a mastery round. The **format description is shown to everyone**, not just the host — guests shouldn't be playing a game whose rules are only visible to whoever set them up.
+- **Mastery rounds carry no song over the wire.** The host broadcasts only `mastery { index, capMs }`; each client picks its own next song locally via the existing shuffle bag. Mastery songs are therefore *more* private than shared-mode ones — never broadcast at all.
+- **Guess scoping differs by phase, deliberately.** Mastery passes `localSongs={myPool}` — instant, and you know whose songs they are. Crossover passes **`localSongs={null}`** and uses the catalog search: the round announces the artist, so a search finds any of their songs. An earlier version scoped crossover locally, which made the answer the *only* song by that artist in the list — it gave itself away on a near-miss and made every other song unguessable. Don't reintroduce local scoping here.
+- **Crossover scoring — the owner defends, outsiders steal.** Owner scores the normal `7 − N`. A non-owner who won with *strictly fewer* guesses than the owner (or when the owner missed) scores **double**. Ties don't steal. An absent owner counts as a miss so everyone can steal — the round still plays, because splicing the list would break the `totalRounds` clients already hold.
+- **One claim per artist**, or "the owner" of a crossover round is ambiguous.
+- **`MIN_SUPERFAN_POOL = 20` is not arbitrary:** with the finale off, all 20 rounds of the longest game are mastery rounds from one player's own pool. 20 songs covers 20 rounds exactly — the bag empties on the last pick rather than wrapping. A test asserts no configuration can over-draw the pool.
+- **Depth (`DEPTH_CAPS`: hits 25 / standard 60 / deep ∞) is one room-wide setting** doing two jobs. Fairness — an equal cap keeps a 30-song artist comparable to a 400-song one. Throughput — it's passed as `streamArtistPool`'s `isAborted`, so a Hits game stops after roughly the first search instead of walking a whole discography. Every player resolves their own artist in their own browser; without the cap, five simultaneous deep walks through the single shared proxy would crawl.
 
 ## SEO & metadata
 
@@ -161,11 +207,12 @@ Dashboard app must have Redirect URI **exactly** `http://127.0.0.1:3000/callback
 
 ## Watch areas (prioritize when issues appear)
 
-1. **Mobile snippet timing** — the 0.1s stage is at the edge of what mobile audio can do. Two layers now defend it: the `startPosRef`/`playing`-event anchor (fixed the cut-off) and the muted cushion for stages ≤2s (fixed play/pause latency swallowing the snippet). If it regresses, check the anchoring and the cushion, not the ladder. A snippet that is silent rather than short means a `muted` flag got stuck — see the SnippetPlayer notes above.
-2. The full Spotify PKCE round-trip (login → callback → token exchange → refresh).
-3. `resolveTracks` progress UI + pacing on large imports.
-4. Match-cache staleness — songs cached before `album`/`appleUrl` were added lack those fields (local album-guessing and the Apple link won't show for them until re-resolved; catalog search always has them). Bump the cache version if matching rules change.
-5. CSS details across browsers/mobile.
+1. **Mobile snippet timing** — the 0.1s stage is at the edge of what mobile audio can do. Two layers defend it: the `startPosRef`/`playing`-event anchor (fixed the cut-off) and the muted cushion for stages ≤2s (fixed play/pause latency swallowing the snippet). **Confirmed working on a real handset.** The cushion also applies on desktop, where it isn't needed — that's deliberate, kept as a backstop rather than branching on device, since UA sniffing is fragile and a second code path is a second thing to break. If it regresses, check the anchoring and the cushion, not the ladder. A snippet that is *silent* rather than short means a `muted` flag got stuck — see the SnippetPlayer notes above.
+2. **Room recovery under real network conditions** — the 45s host grace period, the reconnect re-broadcast, and presence generally. This is the least-exercised area and the one where presence surprised us most.
+3. The full Spotify PKCE round-trip (login → callback → token exchange → refresh).
+4. `resolveTracks` progress UI + pacing on large imports.
+5. Match-cache staleness — songs cached before `album`/`appleUrl` were added lack those fields (local album-guessing and the Apple link won't show for them until re-resolved; catalog search always has them). Bump the cache version if matching rules change.
+6. CSS details across browsers/mobile — the guess-breakdown histogram is 7 columns wide and hasn't been checked on a narrow screen with a full room.
 
 ## Legal footnote
 

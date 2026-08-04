@@ -1,5 +1,16 @@
 "use client";
 
+// Dense ranking: players level on points share a place number, and the next
+// distinct score skips ahead (1, 1, 3). `totals` arrives already sorted.
+function withPlaces(totals) {
+  const list = totals || [];
+  let place = 0;
+  return list.map((p, i) => {
+    if (i === 0 || p.score !== list[i - 1].score) place = i + 1;
+    return { ...p, place };
+  });
+}
+
 // Between-round and final standings. `results` is this round's per-player
 // outcome (absent on the final board); `totals` is the running order.
 //
@@ -50,10 +61,13 @@ export default function Scoreboard({
         </ul>
       )}
 
+      {/* Equal scores share a place (1, 1, 3) rather than being numbered off in
+          whatever order the speed tiebreak produced — the list stays sorted, but
+          it stops implying a ranking that the points don't support. */}
       <ol className="sb-totals">
-        {(totals || []).map((p, i) => (
+        {withPlaces(totals).map((p) => (
           <li key={p.id} className={p.id === meId ? "me" : ""}>
-            <span className="sb-place mono">{i + 1}</span>
+            <span className="sb-place mono">{p.place}</span>
             <span className="sb-name">{p.name}</span>
             <span className="sb-points mono">{p.score}</span>
           </li>

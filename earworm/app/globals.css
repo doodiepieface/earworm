@@ -1984,3 +1984,7 @@ code {
   margin: 0;
   font-size: 0.8rem;
 }
+
+.tie-note {
+  margin: -6px 0 18px;
+}

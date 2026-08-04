@@ -1003,18 +1003,53 @@ function RoomPage() {
   }
 
   if (phase === "ended") {
-    const winner = totals[0];
+    // Everyone on the top score, not just whoever sorted first. The standings
+    // are ordered with a speed tiebreak, so taking totals[0] as "the winner"
+    // silently handed a shared score to one player — and since the list is only
+    // as stable as that tiebreak, it looked arbitrary from the outside.
+    const topScore = totals[0]?.score ?? 0;
+    const leaders = totals.filter((p) => (p.score ?? 0) === topScore);
+    const tied = leaders.length > 1;
+    const iLead = leaders.some((p) => p.id === meId.current);
+    const leaderNames = leaders.map((p) => p.name);
+    const nameList =
+      leaderNames.length <= 2
+        ? leaderNames.join(" and ")
+        : `${leaderNames.slice(0, -1).join(", ")} and ${leaderNames[leaderNames.length - 1]}`;
+
     return (
       <div className="page room-ended">
         <h1>
-          {winner?.id === meId.current ? (
+          {totals.length === 0 ? (
+            "Game over."
+          ) : topScore === 0 ? (
+            "Nobody scored."
+          ) : tied ? (
+            iLead ? (
+              <>
+                You <em>tied</em> for first.
+              </>
+            ) : (
+              <>
+                It&rsquo;s a <em>tie.</em>
+              </>
+            )
+          ) : leaders[0].id === meId.current ? (
             <>
               You <em>won.</em>
             </>
           ) : (
-            `${winner?.name || "Nobody"} wins.`
+            `${leaders[0].name} wins.`
           )}
         </h1>
+
+        {tied && topScore > 0 && (
+          <p className="hero-sub tie-note">
+            {nameList} finished level on {topScore} point{topScore === 1 ? "" : "s"}.
+            <span className="dim"> Listed by who got there quickest.</span>
+          </p>
+        )}
+
         <Scoreboard totals={totals} meId={meId.current} final />
         <GuessDistribution players={totals} meId={meId.current} />
         <div className="room-actions">
