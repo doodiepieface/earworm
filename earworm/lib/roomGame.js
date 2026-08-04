@@ -194,22 +194,88 @@ export function splitPhases(rounds, playerCount = 0, withFinale = true) {
   return { mastery, finale };
 }
 
+// Who defends how many finale rounds. Everyone gets the same base share; the
+// remainder — 4 rounds across 3 artists leaves one spare — goes to whoever is
+// furthest behind. Your own artist is your best scoring chance in the finale, so
+// handing the spares to the leader would widen a gap the finale is there to
+// close.
+//
+// `standings` is the scoreboard as the finale begins, so worst-first here is
+// exactly sortStandings reversed. Anyone missing from it counts as zero, which
+// puts them at the front — which is where an unscored player belongs anyway.
+//
+// Returns { order, quotas }: the owners worst-placed first, and how many rounds
+// each one gets.
+export function finaleQuotas(playerIds, count, standings = []) {
+  const ids = playerIds || [];
+  if (!ids.length || count <= 0) return { order: [], quotas: new Map() };
+
+  const byId = new Map((standings || []).map((p) => [p.id, p]));
+  // Sort is stable, and there is deliberately no id tiebreak: players level on
+  // both score and time keep the order the caller handed them in, which is
+  // already shuffled. So a spare round between two genuinely tied players is a
+  // coin flip rather than always the same name.
+  const order = ids.slice().sort((a, b) => {
+    const A = byId.get(a) || {};
+    const B = byId.get(b) || {};
+    return (A.score || 0) - (B.score || 0) || (B.timeMs || 0) - (A.timeMs || 0);
+  });
+
+  const base = Math.floor(count / order.length);
+  const spare = count - base * order.length;
+  const quotas = new Map(order.map((id) => [id, base]));
+  for (let i = 0; i < spare; i++) quotas.set(order[i], base + 1);
+  return { order, quotas };
+}
+
 // Round-robin through the owners so no two consecutive rounds belong to the same
 // player. `samples` is [{ playerId, songs }]. Stops short if the samples run out
 // rather than repeating a song.
-export function buildCrossoverList(samples, count, random = Math.random) {
+//
+// `standings` decides who gets the spare rounds when the count doesn't divide
+// evenly (see finaleQuotas) — which is why the caller has to draw this list
+// after the mastery phase rather than at kickoff.
+export function buildCrossoverList(samples, count, random = Math.random, standings = null) {
   const queues = shuffled(samples || [], random)
     .filter((s) => s && s.songs?.length)
     .map((s) => ({ playerId: s.playerId, songs: shuffled(s.songs, random) }));
   if (!queues.length) return [];
 
+  const { order, quotas } = finaleQuotas(queues.map((q) => q.playerId), count, standings);
+  const byId = new Map(queues.map((q) => [q.playerId, q]));
+  const ordered = order.map((id) => byId.get(id));
+  const left = new Map(quotas);
   const out = [];
-  let i = 0;
-  while (out.length < count && queues.some((q) => q.songs.length)) {
-    const q = queues[i % queues.length];
-    const song = q.songs.shift();
-    if (song) out.push({ kind: "round", song, ownerId: q.playerId, contributedBy: null });
-    i++;
+  const take = (q) =>
+    out.push({ kind: "round", song: q.songs.shift(), ownerId: q.playerId, contributedBy: null });
+
+  // Cycle worst-placed first, skipping anyone who has used their quota. The
+  // rotation is what keeps two of the same owner's rounds apart, and starting
+  // from the back of the scoreboard puts the trailing player's extra round
+  // early rather than dangling off the end.
+  let cursor = 0;
+  while (out.length < count) {
+    let picked = null;
+    for (let k = 0; k < ordered.length; k++) {
+      const q = ordered[(cursor + k) % ordered.length];
+      if ((left.get(q.playerId) || 0) > 0 && q.songs.length) {
+        picked = q;
+        cursor += k + 1;
+        break;
+      }
+    }
+    if (!picked) break;
+    left.set(picked.playerId, left.get(picked.playerId) - 1);
+    take(picked);
+  }
+
+  // Someone's sample was thinner than their quota. Cutting the finale short
+  // would punish the room for one skinny catalog, so whoever still has songs
+  // covers the gap.
+  while (out.length < count && ordered.some((q) => q.songs.length)) {
+    const q = ordered[cursor % ordered.length];
+    cursor++;
+    if (q.songs.length) take(q);
   }
   return out;
 }

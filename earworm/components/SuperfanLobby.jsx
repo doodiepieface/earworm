@@ -109,7 +109,9 @@ export default function SuperfanLobby({
             hears the <em>same</em> song, pulled from one player&rsquo;s artist.
             The owner is expected to get it, so anyone who beats them on their
             own artist scores <strong>double</strong>. Every player&rsquo;s
-            artist gets at least one finale round.
+            artist gets at least one finale round, and any spare rounds go to
+            whoever is <em>losing</em> at that point &mdash; last place gets the
+            extra shot at home turf.
           </p>
         ) : (
           <p className="dim">

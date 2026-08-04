@@ -92,9 +92,13 @@ export function createHost({ mode = "shared", random = Math.random } = {}) {
       // sizes are only known once everyone has resolved, which is why this is a
       // clamp here rather than a gate in the lobby.
       if (s.maxMastery > 0) mastery = Math.min(mastery, s.maxMastery);
-      const masteryRounds = Array.from({ length: mastery }, () => ({ kind: "mastery" }));
-      const samples = [...s.samples.entries()].map(([playerId, songs]) => ({ playerId, songs }));
-      s.list = [...masteryRounds, ...buildCrossoverList(samples, finale, s.random)];
+      s.list = [
+        ...Array.from({ length: mastery }, () => ({ kind: "mastery" })),
+        // Placeholders, not rounds. Which artist defends the spare finale round
+        // depends on who's losing, and at kickoff nobody has scored anything —
+        // so the crossover rounds are drawn later, by fillFinale().
+        ...Array.from({ length: finale }, () => ({ kind: "pending" })),
+      ];
       return;
     }
     s.list = buildRoundList({
@@ -105,7 +109,23 @@ export function createHost({ mode = "shared", random = Math.random } = {}) {
     }).map((r) => ({ kind: "round", song: r.song, contributedBy: r.contributedBy, ownerId: null }));
   }
 
+  // Draw the crossover rounds, now that the mastery phase has produced a
+  // scoreboard for finaleQuotas to read. Runs once — the placeholders it
+  // replaces are the only trigger, so a host reconnect re-emitting the current
+  // round can't reshuffle a finale that's already underway.
+  function fillFinale() {
+    const first = s.list.findIndex((e) => e.kind === "pending");
+    if (first < 0) return;
+    const count = s.list.length - first;
+    const samples = [...s.samples.entries()].map(([playerId, songs]) => ({ playerId, songs }));
+    const drawn = buildCrossoverList(samples, count, s.random, standingsFromTotals());
+    // A short draw (someone's sample thinner than the finale needs) ends the
+    // game early rather than leaving unplayable placeholders in the list.
+    s.list = [...s.list.slice(0, first), ...drawn];
+  }
+
   function directiveFor(index) {
+    if (s.list[index]?.kind === "pending") fillFinale();
     const entry = s.list[index];
     if (!entry) return { event: "end", payload: { totals: standingsFromTotals() } };
 
