@@ -84,7 +84,11 @@ export function joinRoom(code, { self, onEvent, onRoster }) {
     // presenceState() gives { key: [meta, ...] }; one meta per connection, and a
     // reconnecting client can briefly have two. Keep the first per key.
     const players = Object.values(state)
-      .map((metas) => metas[0])
+      // LAST meta, not first. Presence keeps a list per key and appends on every
+      // track(), so a host who changes a room setting ends up with both the old
+      // and new metadata under their key — taking metas[0] pins everyone to the
+      // value from when they joined and silently ignores every later change.
+      .map((metas) => metas[metas.length - 1])
       .filter(Boolean)
       // `mode` and `depth` are room-wide settings that only the host knows —
       // a joiner's URL is a bare /room/CODE. Carrying them in presence means
