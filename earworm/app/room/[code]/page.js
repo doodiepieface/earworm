@@ -151,9 +151,6 @@ function RoomPage() {
   const myPool = useRef([]);
   const myPlayed = useRef(new Set()); // shuffle-bag state across mastery rounds
   const myLastId = useRef(null);
-  // Songs the guess box can offer during crossover rounds: this player's own
-  // catalog plus every crossover song seen so far.
-  const crossoverPool = useRef([]);
   const claimsRef = useRef([]);
 
   // Mirrors of state that memo-free handlers need to read without going stale.
@@ -406,7 +403,6 @@ function RoomPage() {
           playerId: meId.current,
           songs: shuffled(myPool.current).slice(0, SUPERFAN_SAMPLE_SIZE),
         });
-        crossoverPool.current = dedupeById([...myPool.current]);
       }
       setLocked(true);
       setTotals([]);
@@ -420,11 +416,6 @@ function RoomPage() {
     }
 
     if (event === "round") {
-      // Crossover rounds need something local for the guess box to filter, so
-      // fold each one into the pool as it arrives.
-      if (roomModeRef.current === "superfan") {
-        crossoverPool.current = dedupeById([...crossoverPool.current, payload.song]);
-      }
       setRound({
         key: `${payload.index}-${payload.song.id}-${Date.now()}`,
         kind: "round",
@@ -532,7 +523,6 @@ function RoomPage() {
         myPool.current = [];
         myPlayed.current = new Set();
         myLastId.current = null;
-        crossoverPool.current = [];
       }
 
       if (isHost) {
@@ -962,12 +952,14 @@ function RoomPage() {
           startAt={round.startAt}
           forceEnd={forceEnd}
           capMs={round.capMs}
+          // Mastery rounds scope to your own artist — instant, and you already
+          // know whose songs they are. Crossover rounds deliberately do NOT
+          // scope: the round announces the artist, so the catalog search can
+          // find any of their songs. Scoping to a local pool made the answer
+          // the ONLY song by that artist in the list, which gave it away on a
+          // near-miss and made every other song unguessable.
           localSongs={
-            roomMode !== "superfan"
-              ? null
-              : round.kind === "mastery"
-              ? myPool.current
-              : crossoverPool.current
+            roomMode === "superfan" && round.kind === "mastery" ? myPool.current : null
           }
           onFinish={handleRoundFinish}
           onUnplayable={handleRoundUnplayable}
